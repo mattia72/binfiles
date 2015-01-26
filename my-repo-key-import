@@ -1,0 +1,6 @@
+#!/bin/bash
+echo "Kérem a hiányzó kulcs utolsó 8 karakterét:"
+key_last_eght_char=""
+read key_last_eght_char
+gpg --keyserver keyserver.ubuntu.com --recv $key_last_eght_char
+gpg --export --armor  $key_last_eght_char | sudo apt-key add -

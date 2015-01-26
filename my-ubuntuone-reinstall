@@ -1,0 +1,28 @@
+#!/bin/bash
+
+function ask_user()
+{
+read -s -n1 -p "Continue [y|n]?" answere 
+case $answere in
+  y|Y|i|I);;
+  *)exit 0;;
+esac
+echo
+}
+
+# Quit the Ubuntu One client
+sudo rm -vrf ~/.local/share/ubuntuone
+rm -vrf ~/.cache/ubuntuone
+rm -vrf ~/.config/ubuntuone
+mv ~/Ubuntu\ One ~/Ubuntu\ One_old
+# Open Applications->Accessories->Passwords and Encryption Keys, go to the Passwords tab, delete the Ubuntu One token
+echo 'sudo apt-get purge ubuntuone-client* python-ubuntuone-storage*'
+ask_user
+sudo apt-get purge ubuntuone-client* python-ubuntuone-storage*
+ 
+# REINSTALLING UBUNTU ONE CLIENT
+echo 'sudo apt-get install ubuntuone-client* python-ubuntuone-storage*'
+ask_user
+sudo apt-get install ubuntuone-client* python-ubuntuone-storage*
+
+

@@ -1,0 +1,15 @@
+#!/bin/bash
+sudo /etc/init.d/vboxdrv start
+sudo /etc/init.d/vboxnet start
+echo "sudo /etc/init.d/samba start"
+cat /home/mata/smb/olvass.el!
+
+echo "vbox-share az fstab-ban?"
+sudo grep vboxsf /etc/fstab
+
+# Note: virtualbox Guest Additions should be installed only 
+# if you’re running a linux distro within a virtualbox 
+# (such a virtual machine is called “guest”)
+#sudo /etc/init.d/virtualbox-ose-guest-utils start #there is no effect on host
+
+VirtualBox 2> /dev/null &

@@ -1,0 +1,2 @@
+#!/bin/bash
+vncviewer -via "-p 223 akos@192.168.1.101" localhost:0

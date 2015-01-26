@@ -1,0 +1,28 @@
+#!/bin/bash
+
+#$1 : 1 or 2
+#   1 - echo ups parameter name
+#   2 - echo ups parameter value
+#$2 : - ups parameter number
+#$3 : - unit of parameter
+ups_name="mustek@localhost"
+
+function usage()
+{
+	echo "Usage: `basename $0` [parameters]
+				parameters:
+								$1 : 1 or 2
+									 1 - echo ups parameter name
+									 2 - echo ups parameter value
+								$2 : - ups parameter number
+								$3 : - unit of parameter"
+	exit 0
+}
+
+if [ -z $1 ]
+then
+	upsc "$ups_name"
+else
+	cmd=$(upsc "$ups_name" | cut -d : -f $1 | nl | grep "^ *$2" | head -1 | cut -f 2 | tr -d ' ')
+	echo "$cmd$3"
+fi

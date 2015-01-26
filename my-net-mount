@@ -1,0 +1,12 @@
+#!/bin/bash
+
+dir_to_mount="/home"
+where_to_mount="/home/mata/mnt"
+
+echo "My ip addres: `/home/mata/bin/my-ip`"
+
+ip_other=`/home/mata/bin/my-get-other-ip | tail -1`
+
+echo "Mount $ip_other:$dir_to_mount to $where_to_mount"
+sudo mount $ip_other:$dir_to_mount $where_to_mount
+

@@ -1,0 +1,4 @@
+#!/bin/bash
+grep -i -h "$*" /home/mata/bin/de-hu-dict/*.txt |
+sed 's/\(.*\)\t=\t\(.*\)$/\2\t=\t\1/;s/ *| */; /g' |sort|
+grep -i --color "$*"

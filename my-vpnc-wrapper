@@ -1,0 +1,115 @@
+#!/bin/bash
+
+vpn_cmd="`which vpnc`"
+vpnc_conf="/home/mata/bin/radius.conf"
+this_script=`basename $0`
+kdlg_common="--icon /usr/share/app-install/icons/knetstats.png"
+
+
+username="evoMaAk0"
+password=""
+
+vpnc_conf="/home/mata/bin/radius.conf"
+pw_in_conf="Xauth password"
+username_in_conf="Xauth username"
+dummy_pw_in_conf="#$pw_in_conf *****"
+dummy_username_in_conf="#$username_in_conf *****"
+
+
+function short_usage()
+{
+  echo -e "Használat: $this_script [kapcsolók] [username] [password]"
+}
+
+function usage()
+{
+  short_usage
+  echo "Kapcsolók:"
+  echo "      -h|--help            : segítség"
+  echo "      -c|--connect         : kapcsolódás..."
+  echo "      [username] [password]: username, password használatával (opcionális)"
+  echo "      -d|--disconnect      : lekapcsolódás"
+}
+
+function check_conf_file()
+{
+##check
+  if [ -z "$(grep "$dummy_pw_in_conf" "$vpnc_conf")" ]
+	then
+		kdialog $kdlg_common --title "$this_script: Hiba!" --error "A password fájl hibás.\nNincs benne a következő sor:\n$dummy_pw_in_conf"
+		exit;
+	fi
+}
+
+vpn_password="" #get_password_form_user output
+function start_vpnc_connect()
+{
+		sed -i "s/\(^.*$pw_in_conf.*$\)/$pw_in_conf $password/" "$vpnc_conf"
+		sed -i "s/\(^.*$username_in_conf.*$\)/$username_in_conf $username/" "$vpnc_conf"
+	#cat "$vpnc_conf"
+		echo "Start vpnc & connect ..."
+		response_text=$(sudo $vpn_cmd "$vpnc_conf")
+		respval=$?
+	#sudo returns the value of command...
+echo "$this_script: vpnc válasza=$respval"
+##########Enable local lan#############
+		if [ "$respval" -eq 0 ]
+		then
+			/home/mata/bin/my-vpnc-enable-local-lan
+		fi
+#######################################
+
+		kdialog $kdlg_common --title "$this_script: vpnc válasza=$respval" --msgbox "$response_text" &
+
+	#delete username & password from config file
+		sed -i "s/^\($pw_in_conf .*$\)/$dummy_pw_in_conf/" "$vpnc_conf"
+	#don't delete username...
+	#sed -i "s/^\($username_in_conf .*$\)/$dummy_username_in_conf/" "$vpnc_conf"
+}
+function start_vpnc_disconnect()
+{
+		echo "Disconnect vpnc..."
+		response_text=$(sudo vpnc-disconnect)
+	#sudo returns the value of command...
+		kdialog $kdlg_common --title "$this_script: vpnc válasza=$?" --msgbox "$response_text" &
+}
+
+function get_username_pw_console()
+{
+	if [ -z $username ]; then
+		echo -n "Felhasználónév: "
+		read username
+	else
+		echo -e "Felhasználónév\t:$username"
+	fi
+
+	if [ -z $password ]; then
+		stty -echo    # Turns off screen echo.
+	  echo -en "Jelszó\t:"
+	  read password
+		stty echo     # Restores screen echo.
+	  echo
+	fi
+}
+
+#############:::::SCRIPT BEGINS::::#################
+
+if [ -n "$2" ]; then
+  username="$2"
+	if [ -n "$3" ]; then
+		password="$3"
+	fi
+fi
+
+case $1 in
+	-d|--disconnect) start_vpnc_disconnect;;
+	-c|--connect)
+			check_conf_file
+			get_username_pw_console
+			start_vpnc_connect
+			;;
+	-h|--help) usage; exit 1;;
+	*)usage; exit 1;;
+esac
+
+

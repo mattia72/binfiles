@@ -1,0 +1,37 @@
+#!/bin/sh
+
+#echo "Hi `/usr/bin/whoami` on `/bin/hostname`!"
+#echo "Your command: $SSH_ORIGINAL_COMMAND" 
+
+case "$SSH_ORIGINAL_COMMAND" in
+*\&*)
+echo "Rejected"
+;;
+*\(*)
+echo "Rejected"
+;;
+*\{*)
+echo "Rejected"
+;;
+*\;*)
+echo "Rejected"
+;;
+*\<*)
+echo "Rejected"
+;;
+*\`*)
+echo "Rejected"
+;;
+*\|*)
+echo "Rejected"
+;;
+unison\ -server*)
+$SSH_ORIGINAL_COMMAND
+;;
+rsync\ --server*)
+$SSH_ORIGINAL_COMMAND
+;;
+*)
+echo "Rejected"
+;;
+esac 

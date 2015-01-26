@@ -1,0 +1,7 @@
+#!/bin/bash
+sudo pon dsl-provider
+my-wait 5
+LOCALGW=`ifconfig | sed -n '/^ppp.*/{n;p;}' | sed 's/ *inet addr:\(.*\) P-t-P.*/\1/'`
+echo "Local gw ip: $LOCALGW"
+#sudo route -v add default gw $LOCALGW
+#route && ifconfig

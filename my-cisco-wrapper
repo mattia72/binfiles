@@ -1,0 +1,153 @@
+#!/bin/bash
+#################################
+#
+#      Cisco vpnclient wrapper
+#
+#################################
+
+username="evoMaAk0"
+password=""
+
+
+#profiles=(esH Radius)
+default_profile="Radius" #default profile
+
+#logging...
+#vpnclient_log="~/.vpnclient.log"
+#empty file...
+#killall ipseclog
+#: > "$vpnclient_log"
+
+connection_string="Your VPN connection is secure."
+check_connection_string="VPN tunnel"
+
+this_script=`basename $0`
+kdlg_common="--icon /usr/share/app-install/icons/knetstats.png"
+
+function short_usage()
+{
+  echo -e "Használat: $this_script [kapcsolók] [username] [password]"
+}
+
+function usage()
+{
+  short_usage
+  echo "Kapcsolók:"
+  echo "      -h|--help            : segítség"
+  echo "      -c|--connect         : kapcsolódás..."
+  echo "      [username] [password]: username, password használatával (opcionális)"
+  echo "      -d|--disconnect      : lekapcsolódás"
+  echo " VAGY"
+  echo " Lehetnek vpnclient_init paraméterek:"
+  /etc/init.d/vpnclient_init
+}
+
+function check_start()
+{
+	WAIT_TIMEOUT=10
+	while ((0 < WAIT_TIMEOUT--))
+	do
+		response=`sudo vpnclient stat | grep -A 3 "$check_connection_string"`
+		if [[ -n "$response" ]]
+		then
+			kdialog $kdlg_common --title "$this_script: status" --msgbox "$connection_string\n$response" &
+			return 1 #start ok
+		fi
+		sleep 1
+	done
+  if [ 0 -ge $WAIT_TIMEOUT ]
+  then
+    response=`sudo vpnclient stat | grep -r -A 4 "^$"`
+    kdialog $kdlg_common --title "$this_script" --error "VPN connection failed!\nvpnclient status:\n$response" &
+  	echo "$response"
+		echo "Wait failed..."
+		return 0 #start failed
+  fi
+}
+
+function get_username_pw_console()
+{
+	if [ -z $username ]; then
+		echo -n "Felhasználónév: "
+		read username
+	else
+		echo -e "Felhasználónév\t:$username"
+	fi
+
+	if [ -z $password ]; then
+   stty -echo    # Turns off screen echo.
+	 echo -en "Jelszó\t:"
+	 read password
+   stty echo     # Restores screen echo.
+	 echo
+	fi
+}
+
+function wait_some_secs()
+{
+	count="$1"
+	echo -n "Wait... "$count"s"
+	while ((count--))
+	do
+		echo -ne "\rWait... "$count"s           "
+		sleep 1
+  done
+  echo
+}
+
+#############:::::SCRIPT BEGINS::::#################
+
+if [ -n "$2" ]; then
+  username="$2"
+	if [ -n "$3" ]; then
+		password="$3"
+	fi
+fi
+
+case $1 in
+	-d|--disconnect)
+          echo "---------- Starting vpnclient disconnect----------"
+          sudo vpnclient disconnect
+          echo "---------- Starting vpnclient_init stop ----------"
+          sudo /etc/init.d/vpnclient_init stop
+          ;;
+	-c|--connect)
+	        case $default_profile in
+            es[hH])ORIG_PCF_FILE="$HOME/bin/esH.pcf.orig";;
+            [Rr]adius)ORIG_PCF_FILE="$HOME/bin/Radius.pcf.need_script";;
+          esac
+
+					get_username_pw_console
+
+          sed -i "s/^Username=.*$/Username=$username/" $ORIG_PCF_FILE
+          sed -i "s/^UserPassword=.*$/UserPassword=$password/" $ORIG_PCF_FILE
+
+#logging...
+#ipseclog "$vpnclient_log" &
+
+          BASE_NAME=`basename $ORIG_PCF_FILE`
+          echo "---------- Copying $BASE_NAME ----------"
+          PCF_FILE=`expr match "$BASE_NAME" '\(.*\)\.pcf\..*$'`
+          sudo cp -v "$ORIG_PCF_FILE" "/etc/opt/cisco-vpnclient/Profiles/$PCF_FILE.pcf"
+          echo "---------- Starting vpnclient_init start ----------"
+          sudo /etc/init.d/vpnclient_init start
+          echo "vpnclient_init response: $?"
+
+					wait_some_secs 3
+
+          echo "---------- Starting vpnclient connect with \"$PCF_FILE\" ----------"
+          sudo vpnclient connect $PCF_FILE &
+
+					check_start
+
+##########Enable local lan#############
+					if [ "$?" -eq 1 ]
+					then
+						~/bin/my-cisco-enable-loc-lan
+					fi
+          ;;
+	-h|--help) usage; exit 1;;
+	*)			echo "----------Starting vpnclient_init $1----------"
+          sudo /etc/init.d/vpnclient_init $1
+          ;;
+esac

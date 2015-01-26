@@ -1,0 +1,31 @@
+#!/bin/bash
+
+  loop_limit=10
+  sleep_secs=1
+	begin_char="["
+	end_char="]"
+	point_char="."
+	moving_char="."
+	delete_char=" "
+
+	loop_index=1
+	inner_loop_index=1
+	begin_chars="$begin_char$point_char"
+	moving_chars="$point_char$moving_char"
+	echo -n "$begin_chars"
+	while true
+	do
+			if [ 0 -eq $((loop_index % loop_limit)) ]
+			then
+				echo -ne "\r$begin_chars"
+				for ((n=0; n<loop_limit; n++))
+				do
+					echo -n "$delete_char"
+				done
+				echo -n "$end_char  $((inner_loop_index++))"
+				echo -ne "\r$begin_chars"
+			fi
+			echo -ne "\b$moving_chars"
+			sleep "$sleep_secs"
+		((loop_index++))
+	done

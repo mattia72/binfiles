@@ -1,0 +1,171 @@
+#!/bin/bash 
+
+WHICH="/usr/bin/which"
+SSH=$($WHICH ssh)
+SSH_ADD=$($WHICH ssh-add)
+RSYNC=$($WHICH rsync)
+SCP=$($WHICH scp)
+UNISON=$($WHICH unison)
+GREP=$($WHICH grep)
+
+ssh_port=223
+user="mata"
+key_file_with_pw="/home/mata/.ssh/id_rsa"
+key_file="-i /home/mata/.ssh/rsync_rsa"
+
+function Usage()
+{
+	echo "Usage: " `basename $0` ' [method] [way] <address> <directory|file> 
+method:
+        --ssh    : use ssh 
+        --scp    : use scp
+        --rsync  : use rsync with empty passphrase
+        --unison : use unison with empty passphrase
+way:
+	--out    : we want to send files out
+	--in     : we want to get files from the other 
+address:
+	--url X : destination ip address
+directory|file:
+	--dir X  : some/directory
+	should be exists on both side in case of rsync
+	--file X : some.file
+'
+}
+
+ip_other=""
+function get_other_ip()
+{
+	if [[ $address == "" ]]
+	then 
+		ip_other=`(/home/mata/bin/my-get-other-ip || echo 0.0.0.0) | tail -1`
+	else
+		ip_other="$address"
+	fi
+}
+
+ssh_proto=""
+function extend_ssh_proto()
+{
+	if [ $(expr match "$1" '.*@') -gt 0 ]
+	then
+		ssh_proto_tmp=${1/:/":$ssh_port/"}
+		ssh_proto="ssh://$ssh_proto_tmp"
+	else
+		ssh_proto="$1"
+	fi
+}
+
+function error_msg()
+{
+	echo "Error: \"$1\" invalid parameter!"
+	Usage
+}
+
+function add_to_ssh_add()
+{
+	if [[ $($SSH_ADD -l | $GREP -o "$key_file_with_pw") != "$key_file_with_pw" ]]
+	then
+		echo "Store identity for further use."
+		$SSH_ADD $key_file_with_pw
+	else
+		echo "Using stored identity of $key_file_with_pw"
+	fi
+}
+
+function ask_continue()
+{
+	echo "Press Enter to continue or Ctrl+C to abort!"
+	read
+}
+
+if [[ $# < 2 ]]
+then
+	Usage
+	exit 1
+fi
+
+destination=""
+while [ ${#1} -gt 0 ]; do  #a paraméter hossza > 0
+	case "$1" in
+	--ssh|--rsync|--scp|--unison) method="$1";;
+	--in|--out) way="$1";;
+	--url) shift; address="$1";;
+	--dir|--file) shift; dir_or_file="$@";;
+	*) error_msg $1 
+	   exit 1;;
+	esac
+	shift
+done
+
+#echo "Debug: $method $way $dir_or_file $address"
+
+case $way in
+--out)
+	source="$dir_or_file"
+	get_other_ip
+	if [[ "$dir_or_file" == "" ]]
+	then
+		destination="$user@$ip_other" 
+	else
+		destination="$user@$ip_other:$dir_or_file" 
+	fi;;
+--in) 
+	get_other_ip
+	source="$user@$ip_other:$dir_or_file"
+        destination="$dir_or_file";; 
+*)   	error_msg $way 
+        exit 1;; 
+esac
+
+case $method in
+--ssh)  #ssh and scp has pw protected key
+	add_to_ssh_add
+	echo "Start ssh to $destination"
+        echo "$SSH -p $ssh_port -L 5900:localhost:5900 -X $destination"
+	ask_continue
+        $SSH -p "$ssh_port" -L 5900:localhost:5900 -X "$destination"
+	;;
+--rsync)
+	if [[ "$dir_or_file" == "" ]]
+	then
+		error_msg "--dir"
+		exit 1
+	fi
+	echo "Synchronize with rsync $source to $destination"
+	#todo --exclude "dir1"
+	echo "$RSYNC -avzP -e \"ssh -p $ssh_port $key_file\" --delete $source $destination"
+	ask_continue
+	$RSYNC -avzP -e "ssh -p $ssh_port $key_file" --delete "$source" "$destination"
+	;;
+--scp)
+	if [[ "$dir_or_file" == "" ]]
+	then
+		error_msg "--file"
+		exit 1
+	fi
+        #ssh and scp has pw protected key
+	add_to_ssh_add
+	echo "Copy $source to $destination"
+	echo "scp -r -P $ssh_port \"$source $destination\""
+	ask_continue
+	scp -r -P $ssh_port "$source" "$destination"
+	;;
+--unison)
+	if [[ "$dir_or_file" == "" ]]
+	then
+		error_msg "--dir"
+		exit 1
+	fi
+	echo "Syncronise with unison $source to $destination"
+	extend_ssh_proto $source
+	source=$ssh_proto 
+	extend_ssh_proto $destination
+	destination=$ssh_proto 
+	echo "$UNISON -ui text -times -force newer -sshargs "$key_file" $source $destination" 
+	ask_continue
+	$UNISON -ui text -times -force newer -sshargs "$key_file" "$source" "$destination" 
+	;;
+*)     	error_msg $method 
+        exit 1;; 
+esac

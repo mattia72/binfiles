@@ -1,0 +1,38 @@
+#!/bin/bash
+
+WIKI_DIR=/home/mata/www/mattiassicha.extra.hu/dokuwiki
+
+# mindent bele a www-data csoportba
+sudo chown -R `whoami`:www-data "$WIKI_DIR"
+# user és csoport jogai
+sudo chmod -R ug+w "$WIKI_DIR"
+
+# pushd "$WIKI_DIR/conf"
+#
+# files=(local.php users.auth.php acl.auth.php)
+# for file_name in ${files[@]}
+# do
+#   mv -v "$file_name" "$file_name.backup"
+# done
+#
+# popd
+
+# pushd "$WIKI_DIR"
+# # data directory
+# chmod -R 775 data/
+# #chgrp -Rv www-data data/
+#
+# # Allow web configuration:
+# chmod 775 conf/
+# pushd conf/
+# #chgrp -v www-data local.php users.auth.php acl.auth.php
+# chmod  664 local.php users.auth.php acl.auth.php
+#
+# # Plugin manager:
+# popd
+#
+# pushd lib/
+# #chgrp www-data plugins/
+# chmod 775 plugins/
+#
+# popd

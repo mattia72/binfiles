@@ -1,0 +1,44 @@
+#!/bin/bash
+
+function usage()
+{
+	echo "Usage: `basename $0` upsname@hostname[:port] [username] [password]"
+	exit 0
+}
+
+ups_name=""
+if [ -n "$1" ]; then
+  ups_name="$1"
+else
+	usage
+fi
+username=""
+if [ -n "$2" ]; then
+  username="$2"
+fi
+password=""
+if [ -n "$3" ]; then
+  password="$3"
+fi
+
+title1="`basename $0` - [$ups_name]"
+title2=`upscmd -l "$ups_name" | head -1 `
+items=`upscmd -l "$ups_name" | grep ' - ' |sed 's/ /˙/g;' | nl `
+
+echo -e "calling...\nkdialog --title \"$title1\" --menu \"$title2\" \n$items"
+cmd_num=`kdialog --icon ./icon.png --title "$title1" --menu "$title2" $items`
+
+if [ -z $cmd_num ]; then exit 0; fi
+
+ups_command=`echo $items | grep $cmd_num |sed 's/^.*[0-9] *\([^ ]*\)˙-.*$/\1/'`
+
+if [ -z "$username" ]; then
+	username=`kdialog --inputbox "Username:"`
+fi
+
+if [ -z "$password" ]; then
+	password=`kdialog --password "Password:"`
+fi
+
+echo "upscmd  -u $username -p $password $ups_name $ups_command"
+upscmd -u "$username" -p "$password" "$ups_name" "$ups_command"

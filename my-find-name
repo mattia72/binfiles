@@ -1,0 +1,12 @@
+#!/bin/sh
+# fájlok keresése adott könyvtárban név alapján
+# esetleg valami parancs futtatása
+where="$1"
+what="$2"
+if [ 2 -eq "$#" ]
+then
+  find "$where" -iname "*$what*"
+else
+  find "$where" -iname "*$what*" -exec "$3" '{}' \;
+fi
+

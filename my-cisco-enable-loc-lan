@@ -1,0 +1,28 @@
+#!/bin/bash
+#################################################
+# change these values to suite your needs
+LOCALNET=10.10.0.0 #192.168.64.0
+LOCALMASK=255.255.0.0
+SECDEV=cipsec0
+
+LOCALGW=192.168.1.1
+LOCALDEV=eth0
+#################################################
+
+echo "Enable local lan access..."
+# Allow access to your local LAN
+echo "route add -net $LOCALNET netmask $LOCALMASK dev $SECDEV"
+sudo route add -net $LOCALNET netmask $LOCALMASK dev $SECDEV
+##OR
+# Add a static route to your local LAN gateway on your local LAN device
+echo "route -v add -host $LOCALGW dev $LOCALDEV"
+sudo route -v add -host $LOCALGW dev $LOCALDEV
+
+# Don't route traffic to the internet or other subnets through the VPN tunnel
+# If there are more than one subnets on the destination site, make sure that
+# all of them are having a static route entry, otherwise you are only able to
+# connect to the default subnet on the remote site.
+echo "route -v del -net 0.0.0.0 dev $SECDEV"
+sudo route -v del -net 0.0.0.0 dev $SECDEV
+echo "route -v add default gw $LOCALGW"
+sudo route -v add default gw $LOCALGW

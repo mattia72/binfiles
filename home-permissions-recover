@@ -1,0 +1,5 @@
+#/bin/bash!
+chown -Rc username:username /home/username
+chmod 644 /home/username/.dmrc
+chmod 644 /home/username/.ICEauthority
+exit

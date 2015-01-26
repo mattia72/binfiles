@@ -1,0 +1,43 @@
+#!/bin/bash
+#checks clipperz checksum
+
+# Size: 1.564.242 bytes
+MD5="862c4f5346c58ddc886d663a4f46e2c5"
+SHA1="1e13905d93e1cb4738ae2d083e0740d1006dfe72"
+
+
+function create_tmpfile()
+{
+	BASE_STR=`/usr/bin/mcookie`   # 32-character magic cookie.
+	POS=11               # Arbitrary position in magic cookie string.
+	LEN=8                # Get $LEN consecutive characters.
+	suffix=temp
+#prefix=$(date +%s)  # The "+%s" option to 'date' is GNU-specific.
+# Extract a 5-character string, starting at position 11.
+	prefix=${BASE_STR:POS:LEN}
+# Construct the filename.
+	temp_filename=$prefix.$suffix
+#echo "Temp filename = "$temp_filename""
+}
+
+null="/dev/null"
+
+create_tmpfile
+
+pushd ~ >$null #go home
+
+mkdir "$temp_filename"
+
+pushd "$temp_filename" >$null
+
+wget https://www.clipperz.com/beta/index.html
+
+echo -n "MD5 összeg ellenőrzés: "
+echo "$MD5  ./index.html" | md5sum -c | cut -d ':' -f 2 
+#openssl sha1 index.html
+
+popd >$null #home >$null
+rm -rf "$temp_filename" || echo "Nem tudtam törölni: $temp_filename"
+
+popd >$null # go back >$null
+

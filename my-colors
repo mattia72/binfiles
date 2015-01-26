@@ -1,0 +1,72 @@
+#!/bin/bash
+# Display ANSI colors.
+#
+
+foreground="30 31 32 33 34 35 36 37"
+backgound="0 40 41 42 43 44 45 46 47"
+decorations=( [0]="m" [1]=";1m" [2]=";5m" [3]=";4m" )
+
+deco_text=( [0]="m  " [1]=";1m" [2]=";5m" [3]=";4m" )
+decortext=( [0]="Norm " [1]="Bold " [2]="Blink" [3]="Under" )
+
+DECOS=${#decorations[@]}
+esc="\033["
+behaviour="normal"
+
+case $1 in
+"-c"|"--code") behaviour="code";;
+"-h"|"--help") echo -e "Usage: `basename $0` [options]\nDisplays consol colours."
+               echo -e "\t-h, --help\tDisplays this help text."
+               echo -e "\t-c, --code\tDisplays escape codes instead of texts."
+               echo -e "\t          \t(Needs a very wide console window!)"
+               exit ;;
+*            ) ;;
+esac
+
+first_spaces="    "
+echo -ne "$first_spaces"
+
+column_spaces="             "
+
+case $behaviour in
+"code" ) ;;
+*      ) column_spaces=${column_spaces:0:${#decortext[0]}};;
+esac
+
+for back in $backgound; do
+    text=$back
+    text=$text${column_spaces:0:${#column_spaces}-${#back}}
+    echo -ne "$text"
+done
+
+
+echo
+
+declare -a bg_decos;
+
+for fore in $foreground; do
+  unset bg_decos
+
+  bg_decos[0]="$fore"
+  for (( n=0; n<DECOS; n++ ))
+  do
+    length=${#bg_decos[$n]}
+    bg_decos[$n]=${bg_decos[$n]}${first_spaces:0:${#first_spaces}-length}
+  done
+
+  for back in $backgound;  do
+    for (( n=0; n<DECOS; n++ )); do
+      case $behaviour in
+      "code"       ) text="\\\033[$back;$fore${deco_text[$n]}";;
+      *            ) text="${decortext[$n]}";;
+      esac
+      bg_decos[$n]="${bg_decos[$n]}${esc}${back};${fore}${decorations[$n]}$text${esc}0m"
+    done
+  done
+
+  for (( n=0; n<DECOS; n++ ))
+  do
+    echo -ne "${bg_decos[$n]}\n"
+  done
+done
+

@@ -1,0 +1,5 @@
+#!/bin/bash
+
+sudo aptitude -y install hwinfo
+hwinfo > hwinfo.txt
+tar -czf hwinfo.tar.gz hwinfo.txt

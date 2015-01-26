@@ -1,0 +1,16 @@
+#!/bin/bash
+# apache startoló
+processes=(apache2 mysql mysql-ndb mysql-ndb-mgm exim4)
+
+
+if [ -z "$1" ]; then
+  echo "Usage: $(basename $0) [start|stop|restart]"
+  exit 0
+fi
+
+action="$1"
+
+for process in ${processes[@]}
+do
+  sudo /etc/init.d/$process $action
+done

@@ -1,0 +1,21 @@
+#!/bin/bash
+
+subject=""
+attach=""
+attach_size_limit=20
+from=""
+to=""
+
+zip_response_deflated=`zip valami $attach | grep deflated`
+
+attach_size=`du "$attach" | cut -f 1`
+attach_size_mega=$((attach_size / 1024))
+
+if [ $attach_size_mega -gt "$attach_size_limit" ]
+then
+	echo "$attach is $attach_size_mega MB. Limit is $attach_size_limit MB"
+	exit 1
+fi
+
+mutt -f "$from" -s "$subject" -a "$attach" -- $to < /tmp/mailmessage.txt
+

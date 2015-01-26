@@ -1,0 +1,21 @@
+#!/bin/bash
+
+sed "
+s/á/a/g
+s/é/e/g
+s/í/i/g
+s/ó/oo/g
+s/ö/oe/g
+s/ő/oe/g
+s/ú/uu/g
+s/ü/ue/g
+s/ű/ue/g
+s/Á/A/g
+s/É/E/g
+s/Í/I/g
+s/Ó/O/g
+s/Ö/O/g
+s/Ő/O/g
+s/Ú/U/g
+s/Ü/U/g
+s/Ű/U/g"

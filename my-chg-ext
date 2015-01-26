@@ -1,0 +1,19 @@
+#!/bin/sh
+if [ $# -ne 2 ]
+then
+  echo "Changes the extension of files in a directory."
+  echo "Usage: `basename $0` ext1 ext2"
+  # `basename $0` is the script's filename.
+  exit $E_WRONG_ARGS
+fi
+
+rename "s/$1$/$2/" *$1
+
+#bonyolultabban :)
+# *.swav files to *.wav files in a directory
+#for files_ext1 in *$1
+#do
+#	files_ext2=`echo $files_ext1 | sed "s/$1$/$2/"`
+#	mv -v "$files_ext1" "$files_ext2"
+#done
+

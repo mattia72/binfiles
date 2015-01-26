@@ -1,0 +1,4 @@
+#!/bin/bash
+pushd "$1"
+du --max-depth=1 . 2> /dev/null |sort -n
+popd

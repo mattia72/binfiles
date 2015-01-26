@@ -1,0 +1,10 @@
+#!/bin/bash
+for pid in $(screen -ls | grep Detached | sed 's/\s*\([0-9]*\)\..*$/\1/g')
+do
+  exec screen -D -R $pid & 
+done
+
+#RC_FILE_NAME=".screenrc_reattach"
+#cat .screenrc > "$RC_FILE_NAME"
+#screen -ls | grep Detached | sed 's/\s*\([0-9]*\)\..*$/screen -x \1/g' >> "$RC_FILE_NAME"
+#screen -c "$RC_FILE_NAME"

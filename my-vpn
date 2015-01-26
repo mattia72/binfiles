@@ -1,0 +1,224 @@
+#!/bin/bash
+# Bekéri a vpn passwordot és futtatja a vpnc-t.
+# Ha a vpnc terminál, feldob egy dialógust és
+# Igen válasz esetén újra indítja a vpnc-t
+
+vpn_client_type="cisco" #or vpnc
+username="evoMaAk0"
+
+vpn_cmd=""
+vpnc_conf="/home/mata/bin/radius.conf"
+
+VPNSERVER="195.228.171.197"
+#PINGHOST="10.10.109.190"
+PINGHOST="10.10.110.44" #rcenter
+PING_DEADLINE=5
+
+play_sound_on_terminate="/usr/share/sounds/KDE-Sys-App-Error-Serious.ogg"
+player="/usr/bin/playsound"
+this_script=`basename $0`
+kdlg_common="--icon /usr/share/app-install/icons/knetstats.png"
+
+pw_in_conf="Xauth password"
+dummy_pw_in_conf="#$pw_in_conf *****"
+
+ROOT_UID=0   # Only users with $UID 0 have root privileges.
+E_NOTROOT=65
+E_NOPARAMS=66
+
+function short_usage()
+{
+  echo -e "Használat: $this_script [kapcsolók]"
+}
+
+function usage()
+{
+  short_usage
+  echo "Kapcsolók:"
+  echo "      -h|--help      : segítség"
+  echo "VPN kapcsolat létrehozása:"
+  echo "      -c|--cisco     : Cisco VPN Client (`vpnclient --version`)"
+  echo "      -v|--vpnc      : `vpnc --version | head -n 1`"
+}
+
+password=""
+function read_pw_from_console()
+{
+	#if [ -z $password ]; then
+		stty -echo    # Turns off screen echo.
+		echo -en "$1"
+		read password
+		stty echo     # Restores screen echo.
+		echo
+	#fi
+}
+
+function check_root()
+{
+	if [ "$UID" -ne "$ROOT_UID" ]
+	then
+		echo "Must be root to run this script."
+		kdialog $kdlg_common --title "$this_script: Sajnálom..." --sorry "Csak egy adminisztrátor futtathatja ezt a szkriptet"
+	# "Run along kid, it's past your bedtime."
+		exit $E_NOTROOT
+	fi
+}
+
+check_process_run()
+{
+	local process=$1
+	local procid=$(pgrep -f "$process") #pgrep -f ha path-t ad meg az ember
+
+	if [ -z $procid ]
+	then
+		echo "A \"$process\" terminált."
+		return 0
+	else
+#echo "A \"$process\" él."
+		return 1
+	fi
+}
+
+function wait_for_terminate()
+{
+	loop_limit=60
+	begin_char="["
+	end_char="]"
+	point_char="."
+	moving_char="."
+	delete_char=" "
+	loop_index=1
+	inner_loop_index=1
+	begin_chars="$begin_char$point_char"
+	moving_chars="$point_char$moving_char"
+	echo -n "$begin_chars"
+	while true
+	do
+		if [[ -n `ping -c 1 -w $PING_DEADLINE $PINGHOST 2>&1 | grep '1 received'` ]];
+		then
+				if [ 0 -eq $((loop_index % loop_limit)) ]
+			then
+				echo -ne "\r$begin_chars"
+				for ((n=0; n<loop_limit; n++))
+				do
+					echo -n "$delete_char"
+				done
+				echo -n "$end_char  $((inner_loop_index++))"
+				echo -ne "\r$begin_chars"
+			fi
+			echo -ne "\b$moving_chars"
+			sleep 2
+		else
+			echo -e "\nA $PINGHOST nem elérhető."
+			check_process_run "$vpn_cmd"
+			if [ "$?" -eq 0 ]
+			then
+				break
+			else
+				continue
+			fi
+			kdialog $kdlg_common --title "$this_script: ping" --msgbox "A $PINGHOST nem elérhető."
+		fi
+		((loop_index++))
+	done
+	echo "$vpn_cmd terminated  - `date`"
+}
+
+vpn_password="" #get_password_form_user output
+function start_vpnc()
+{
+	sed -i "s/\(^.*$pw_in_conf.*$\)/$pw_in_conf $vpn_password/" "$vpnc_conf"
+#cat "$vpnc_conf"
+	echo "Start vpnc..."
+	response=$(sudo $vpn_cmd "$vpnc_conf")
+#sudo returns the value of command...
+	kdialog $kdlg_common --title "$this_script: vpnc válasza=$?" --msgbox "$response" &
+
+#delete password from config file
+	sed -i "s/^\($pw_in_conf .*$\)/$dummy_pw_in_conf/" "$vpnc_conf"
+}
+
+function get_password_form_user()
+{
+#  read_pw_from_console "VPN password:"
+#  vpn_password="$password"
+	vpn_password=`kdialog $kdlg_common --title "$this_script: Kérem a jelszót!" \
+	--inputbox "VPN jelszó:"` #--password
+	if [ $? -ne 0 ]; then echo "Cancel pushed - Exit"; exit 0; fi
+	key="hu%de#secure?ez<a!kulcs"
+	pw_pre=`mcrypt -dq -k $key --force < /home/mata/.vpn-pre.nc`
+	vpn_password="$pw_pre$vpn_password"
+}
+
+function check_conf_file()
+{
+##check
+  if [ -z "$(grep "$dummy_pw_in_conf" "$vpnc_conf")" ]
+	then
+		kdialog $kdlg_common --title "$this_script: Hiba!" --error "A password fájl hibás.\nNincs benne a következő sor:\n$dummy_pw_in_conf"
+		exit;
+	fi
+}
+
+#############:::::SCRIPT BEGINS::::#################
+
+case $1 in
+	-c|--cisco)
+		vpn_client_type="cisco";;
+	-v|--vpnc)
+		vpn_client_type="vpnc";;
+	-h|--help) usage; exit 1;;
+	*)usage; exit 1;;
+esac
+
+
+check_root
+#sudo ufw allow proto udp from $VPNSERVER to any port 10000
+case $vpn_client_type in
+	cisco)
+		vpn_cmd=`which vpnclient`;;
+	vpnc)
+		vpn_cmd=`which vpnc`;;
+	*)
+		echo "Invalid vpn_client_type."
+		exit 1;;
+esac
+
+
+loop=0 # do again? yes
+
+while [[ $loop != 1 ]]
+do
+	if [[ $loop = 0 ]]
+	then #answer was yes not cancel
+		get_password_form_user
+		case $vpn_client_type in
+			cisco)
+				~/bin/my-cisco-wrapper --connect "$username" "$vpn_password"
+				;;
+			vpnc)
+				~/bin/my-vpnc-wrapper --connect "$username" "$vpn_password"
+	#check_conf_file
+	#start_vpnc
+				;;
+			*)
+				echo "Invalid vpn_client_type."
+				exit 1;;
+		esac
+
+		echo "$vpn_cmd started     - `date`"
+ fi
+  wait_for_terminate
+#vpn client terminated
+	if [ -n $play_sound_on_terminate ]
+	then
+		$player $play_sound_on_terminate &
+	fi
+
+	kdialog $kdlg_common --title "$this_script: Mi legyen?" --warningyesnocancel "A $(basename $vpn_cmd) összecsukta magát, csatlakozzunk újra?"
+	loop=$? #answer yes:0 no:1 cancel:2
+done
+
+
+echo "$this_script: vége."
+exit 0

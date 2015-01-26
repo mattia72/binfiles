@@ -1,0 +1,11 @@
+#!/bin/bash
+
+
+case "$1" in
+  en|de)dict="$1"
+        shift
+        grep -i -h --color  "$*" ~/bin/$dict-hu-dict/*.txt
+        ;;
+  *)
+    grep -i -h --color  "$*" ~/bin/{de,en}-hu-dict/*.txt
+esac

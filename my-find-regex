@@ -1,0 +1,17 @@
+#! /bin/sh
+# fájlok keresése adott könyvtárban reguláris kifejezés alapján
+
+E_WRONG_ARGS=65
+script_parameters="where regex"
+# -a = all, -h = help, etc.
+
+if [ "$#" -ne "2" ]
+then
+  echo "Usage: `basename $0` $script_parameters"
+  echo "       A regex a teljes path-ra illeszkedjen !"
+  # `basename $0` is the script's filename.
+  exit $E_WRONG_ARGS
+fi
+
+find "$1" -iregex "$2"
+

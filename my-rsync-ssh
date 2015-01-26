@@ -1,0 +1,3 @@
+#!/bin/bash
+
+/home/mata/bin/my-ssh-transporter "$1" --rsync "$2"

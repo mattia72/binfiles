@@ -1,0 +1,6 @@
+#!/bin/bash
+for i in `seq 1 6` #how many section has the dvd?
+do 
+# -sid 0 is a subtitle number...
+mencoder dvd://$i -dvd-device /dev/dvd -nosound -ovc copy -sid 0 -vobsubout "subtitle_$i" -o /dev/null
+done

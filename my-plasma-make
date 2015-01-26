@@ -1,0 +1,9 @@
+#!/usr/bin/bash
+echo'
+cmake -DCMAKE_INSTALL_PREFIX=/usr .
+make
+sudo make install
+kbuildsycoca4
+kquitapp plasma
+plasma
+'

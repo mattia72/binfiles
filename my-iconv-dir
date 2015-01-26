@@ -1,0 +1,47 @@
+#!/bin/bash
+
+from="WINDOWS-1252"
+to="utf-8"
+
+what=`find . -iname "*html"`
+
+echo "Fájlok konvertálása $from kódolásból $to kódolásba"
+read -s -n1 -p "Minden fájlt konvertálni akarsz ebben a könyvtárban? [i|n]:" keypress
+ 
+# -s option means do not echo input.
+# -n N option means accept only N characters of input.
+# -p option means echo the following prompt before reading input.
+
+case $keypress in
+	"i" | "I" );;
+	*) echo "Nem történt konvertálás."; exit 1;;
+esac
+
+for file in $what
+do 
+	echo "Konvert $file? Press Enter!"
+	read
+	iconv --verbose -f="$from" -t="$to" "$file" -o "$file.$to"
+	mv -v "$file.$to" "$file"
+done
+
+echo "Fájlok utolsó sorainak listázása ellenőrzésképpen"
+read -s -n1 -p "Listázás? [i|n|k]:" keypress
+ 
+case $keypress in
+	"i" | "I" );;
+	"q" | "k" | "Q" | "K" ) exit 1 ;;
+	*) echo "Nincs listázás.";;
+esac
+
+tail -3  "*.$to"
+
+echo "Konvertált fájlok átnevezése"
+read -s -n1 -p "Átnevezzük a jelenleg .$to keterjesztésű fájlokat? [i|n|k]:" keypress
+ 
+case $keypress in
+	"i" | "I" );;
+	"q" | "k" | "Q" | "K" ) exit 1 ;;
+	*) echo "Nincs átnevezés.";;
+esac
+rename -v -f "\'s/\\.$to//\'" "*.$to"

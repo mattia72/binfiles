@@ -1,0 +1,3 @@
+ 2-wave radio 	=	 urh-adó-vevő
+ 3rd person singular 	=	 egyes szám harmadik személy
+ 500 m above sea level 	=	 500 méterrel a tengerszint felett

@@ -1,0 +1,2478 @@
+#!/usr/bin/perl -Tw
+###############################################################################
+#
+# CTorrent Control Server (CTCS) version 1.4.1
+# Copyright 2006-2008 Dennis Holmes  (dholmes@ct.boxmail.com)
+#
+# This is a program for monitoring and managing Enhanced CTorrent clients.
+# See http://www.rahul.net/dholmes/ctorrent/ctcs.html for details.
+#
+# You will probably want to change the top line if the Perl interpreter
+# is not accessible on your system at the path that is shown.
+#
+#
+# This program is provided AS IS with no warranty of any kind.
+# Use at your own risk!
+#
+# Set tabs = 3 spaces for proper viewing.
+#
+###############################################################################
+
+use strict;
+use Socket;
+use Carp;
+use Fcntl;
+use Errno qw(EAGAIN EWOULDBLOCK);
+use Sys::Hostname;
+
+$| = 1;
+
+# global variables
+my $ver = "1.4.1";
+my $bwinterval = 5;	# bandwidth management interval (seconds)
+my $CTCS_PROTOCOL = "0003";
+my $current_client = "";
+my (%cfh,%torrents,%ctfile,%ctbw,%ctconfig,%ctdetail,%ctstatus,%ctstime,
+	%ctpeer,%ctpeern,%ctinfo,%ctinfoclear,%ctfiledata,%buffer,%ioflag,
+	%totalpieces, %dead,%dtime,%stime,%protocol,%sawseed,%ctconfigvars);
+my (%mindl,%maxdl,%minul,%maxul,%sharedl,%shareul,%maxratio,%realmax);
+my (%pdlrate,%pulrate);
+my (%htclients,%ctsent,%ctsentone);
+my $tdlimit = 100 * 1024;
+my $tulimit = 25 * 1024;	# total dl/ul bw limits
+my ($alldl,$allul)=(0,0);
+my %ctclients1= ( "AG", "Ares",
+						"A~", "Ares",
+						"AR", "Arctic",
+						"AV", "Avicora",
+						"AX", "BitPump",
+						"AZ", "Azureus",
+						"BB", "BitBuddy",
+						"BC", "BitComet",
+						"BF", "Bitflu",
+						"BG", "BTG",
+						"BR", "BitRocket",
+						"BS", "BTSlave",
+						"BX", "Bittorrent X",
+						"CD", "Enhanced CTorrent",
+						"CT", "CTorrent",
+						"DE", "Deluge",
+						"DP", "Data Propagator",
+						"EB", "EBit",
+						"ES", "electric sheep",
+						"HL", "Halite",
+						"HN", "Hydranode",
+						"KT", "KTorrent",
+						"LH", "LH-ABC",
+						"LP", "Lphant",
+						"lt", "libtorrent",
+						"LT", "libtorrent",
+						"LW", "LimeWire",
+						"ML", "MLDonkey",
+						"MP", "MooPolice",
+						"MT", "MoonlightTorrent",
+						"PD", "Pando",
+						"qB", "qBittorrent",
+						"RT", "Retriever",
+						"SB", "Swiftbit",
+						"SS", "SwarmScope",
+						"ST", "SymTorrent",
+						"st", "sharktorrent",
+						"SZ", "Shareaza",
+						"S~", "Shareaza",
+						"TN", "TorrentDotNET",
+						"TR", "Transmission",
+						"TS", "Torrentstorm",
+						"TT", "TuoTu",
+						"UL", "uLeecher!",
+						"UT", "uTorrent",
+						"XL", "Xunlei",
+						"XT", "XanTorrent",
+						"XX", "XTorrent",
+						"ZT", "ZipTorrent"
+	);
+my %ctclients2= ( "A", "ABC",
+						"O", "Osprey Permaseed",
+						"Q", "BTQueue",
+						"R", "Tribler",
+						"S", "Shadow's client",
+						"T", "BitTornado",
+						"U", "UPnP NAT Bit Torrent"
+	);
+my $EOL = "\015\012";
+
+{	# main block
+my $port = 2780;
+my $proto = getprotobyname('tcp');
+my $authpass = 0;
+my %authorized;
+
+while ($_=shift()) {
+	if (/^-d$/) { $tdlimit = shift() * 1024; }
+	elsif (/^-u$/) { $tulimit = shift() * 1024; }
+	elsif (/^-i$/) { $bwinterval = shift(); }
+	elsif (/^-p$/) { $port = shift(); }
+	elsif (/^-P$/) { $authpass = 1; }
+	else {
+		&usage();
+		exit;
+	}
+}
+if ($tdlimit==0 || $tulimit==0 || $bwinterval==0 || $port==0) {
+	&usage();
+	exit;
+}
+$port = $1 if $port =~ /(\d+)/; # untaint port number
+if ($authpass) {
+	print "You have selected to specify a password which CTorrent clients\r\n";
+	print "will use to authenticate to CTCS.\r\n";
+	print "Enter the password to use: ";
+	$authpass = <>;
+}
+
+socket(Server, PF_INET, SOCK_STREAM, $proto)	|| die "socket: $!";
+setsockopt(Server, SOL_SOCKET, SO_REUSEADDR,
+	pack("l", 1)) 	|| die "setsockopt: $!";
+bind(Server, sockaddr_in($port, INADDR_ANY))	|| die "bind: $!";
+listen(Server,SOMAXCONN) 				|| die "listen: $!";
+
+&logmsg("CTCS server started on port $port");
+my $host = hostname() || "localhost";
+my $addr;
+if ($addr=(scalar gethostbyname($host) || scalar gethostbyname("localhost"))) {
+	$addr = inet_ntoa($addr);
+} else {
+	$host = $addr = "127.0.0.1";
+}
+print "\r\nCTorrent Control Server v$ver\r\n";
+print "http://www.rahul.net/dholmes/ctorrent/ctcs.html\r\n";
+print "\r\nUse the '-S $host:$port' option to Enhanced CTorrent\r\n";
+print "to have this CTCS instance manage the client.\r\n";
+print "Status information is available at:\r\n";
+print "    http://$host:$port/\r\n";
+if ($host ne $addr) {
+	print " or http://$addr:$port/\r\n";
+}
+if ($host ne "localhost" && scalar gethostbyname('localhost')) {
+	print " or http://localhost:$port/ (from this system)\r\n";
+}
+print "\r\n";
+
+$SIG{CHLD} = \&REAPER;
+
+# This is an ugly way to handle early socket closure (as from a user not
+# waiting for page load to complete) but seems to be the only thing that works.
+$SIG{PIPE} = sub {
+	syswrite(STDERR, "Unexpected client disconnect, recovering\n");
+	if ($current_client) {
+		delete $htclients{$current_client};
+		delete $ctsentone{$current_client};
+	} else {
+		# we don't know which client it was....
+		# the others may have to reload/refresh.
+		my $client;
+		foreach $client (keys %htclients) {
+			delete $htclients{$client};
+		}
+		foreach $client (keys %ctsentone) {
+			delete $ctsentone{$client};
+		}
+	}
+};
+
+
+my ($nsock,$rin,$win,$ein,$rout,$wout,$eout,$foo,$client,$ct);
+my $cnum = 0;
+my (%clients,%clients2);
+my $bwtime = 0;
+while (1) {
+	%clients = %clients2;
+
+	if (time() >= $bwtime + $bwinterval && scalar(keys %torrents)) {
+		$bwtime = time();
+		&manage_bw;
+	}
+
+	$rin = $win = $ein = '';
+	vec($rin, fileno(Server), 1) = 1;
+	foreach $client (keys %clients) {
+		vec($rin, fileno($cfh{$client}), 1) = 1;
+	}
+	$ein = $rin | $win;
+
+	$nsock = select($rout=$rin, $wout=$win, $eout=$ein, $bwinterval);
+	next if (!$nsock);
+
+	if (vec($rout, fileno(Server), 1)) {
+		--$nsock;
+		++$cnum; $cnum = 1 if ($cnum > 999);
+		$foo = &do_accept(*Server{IO});
+		$client = $cnum . $foo;
+		$cfh{$client} = $foo;
+		$buffer{$client} = "";
+		$clients2{$client} = 1;
+	}
+	next if ($nsock==0);
+
+	foreach $client (keys %clients) {
+		if (vec($rout, fileno($cfh{$client}), 1)) {
+			--$nsock;
+			if (defined($_ = &getline($client))) {
+				do {
+#					printf "Received %s: $_\r\n", defined($torrents{$client}) ?
+#						$torrents{$client} : $client;
+					if (m!^(GET|POST)\s+([^\s]+)\s!i) {
+						$current_client = $client;
+						&send_page($client, $2, $1);
+						delete $clients2{$client};	# keep
+						$current_client = "";
+						last;
+					} elsif (m!PROTOCOL\s+(\d+)!) {
+						$protocol{$client} = ($1 <= $CTCS_PROTOCOL) ?
+							$1 : $CTCS_PROTOCOL;
+					} elsif (m!CTORRENT\s+([^\s]+) +(.*)!) {
+						if (m!CTORRENT\s+([^\s]+) +(\d+) +(\d+) +(.*)!) {
+							$torrents{$client} = $1;
+							# convert start time to local clock
+							$stime{$client} = $2 + (time() - $3);
+							$ctfile{$client} = $4;
+						} else {
+							$torrents{$client} = $1;
+							$ctfile{$client} = $2;
+							$stime{$client} = 0;
+						}
+						$mindl{$client} = $maxdl{$client} = 0;
+						$minul{$client} = $maxul{$client} = 0;
+						$sharedl{$client} = $shareul{$client} = 1;
+						$maxratio{$client} = $realmax{$client} = 0;
+						&send_protocol($client);
+						foreach $ct (keys %dead) {
+							if ($dead{$ct} eq $torrents{$client}) {
+								&dealloc_torrent($ct);
+								last;
+							}
+						}
+					} elsif (m!AUTH\s+(.*)!) {
+						if (!$authpass || $authpass eq $1) {
+							$authorized{$client} = 1;
+						} else {
+							print "Incorrect authorization password from $client\r\n";
+							&send_error($client, "Authentication failure.");
+						}
+					} elsif ($authpass && !$authorized{$client}) {
+						&send_error($client, "Authentication required.");
+					} elsif (m!CTCONFIGSTART!) {
+						delete $ctconfigvars{$client};
+						delete $ctconfig{$client};
+					} elsif (m!CTCONFIG\s+(.*)!) {
+						if ($protocol{$client} >= 3) {
+							if (m!CTCONFIG\s+(\S+) +(\S+) +([\d-]+) +(.*)!){
+								my ($name,$type,$range,$strs) = ($1,$2,$3,$4);
+								if ($type eq "S" && !$range) { $range = 0; }
+								if (!defined($ctconfigvars{$client}) ||
+										$ctconfigvars{$client} !~ /(^| )$name /) {
+									$ctconfigvars{$client} .= "$name ";
+								}
+								$ctconfig{$client}{$name}{"type"} = $type;
+								$ctconfig{$client}{$name}{"range"} = $range;
+								$strs =~ /(\d+):(.*)/;
+								$ctconfig{$client}{$name}{"value"} = substr($2, 0, $1);
+								$strs = substr($2, $1);
+								$strs =~ /(\d+):(.*)/;
+								$ctconfig{$client}{$name}{"sdesc"} = substr($2, 0, $1);
+								$strs = substr($2, $1);
+								$strs =~ /(\d+):(.*)/;
+								$ctconfig{$client}{$name}{"ldesc"} = substr($2, 0, $1);
+							}
+						} else {
+							$ctconfig{$client} = $1;
+						}
+					} elsif (m!CTCONFIGDONE!) {
+
+					} elsif (m!^CTBW\s+(.*)!) {
+						$ctbw{$client} = $1;
+						$ctbw{$client} =~ m!(\d+),(\d+) +(\d+),(\d+)!;
+						my ($dlrate,$ulrate,$dlimit,$ulimit) = ($1,$2,$3,$4);
+						my $change=0;
+						my ($ntorrents,$avg_dl,$avg_ul,$boost);
+						$ntorrents = scalar(keys %torrents);
+						$avg_dl = $tdlimit / $ntorrents;
+						$avg_ul = $tulimit / $ntorrents;
+
+						$alldl = $allul = 0;
+						# If very low & need a bump, immediately raise.
+						# Upper limit is 1K; otherwise use avg/2 or available bw.
+						if ($sharedl{$client}) {
+							$boost = &min(1024, $avg_dl / 2);
+							if ($dlimit < $boost && $dlrate > $dlimit) {
+								foreach $ct (keys %torrents) {
+									if (defined($ctbw{$ct}) &&
+											$ctbw{$ct} =~ m!(\d+),(\d+) +(\d+),(\d+)!) {
+										$alldl += $1 if ($sharedl{$ct});
+										$allul += $2 if ($shareul{$ct});
+									}
+								}
+								$dlimit = &max($boost, $tdlimit - $alldl); $change=1;
+							}
+						}
+						if ($shareul{$client}) {
+							$boost = &min(1024, $avg_ul / 2);
+							if ($ulimit < $boost && $ulrate > $ulimit) {
+								if ($allul == 0) {
+									foreach $ct (keys %torrents) {
+										if (defined($ctbw{$ct}) && $shareul{$ct} &&
+												$ctbw{$ct} =~ m!(\d+),(\d+) +(\d+),(\d+)!) {
+											$allul += $2;
+										}
+									}
+								}
+								$ulimit = &max($boost, $tulimit - $allul); $change=1;
+							}
+						}
+						if ($change) {
+							&set_dl_limit($client, $dlimit);
+							&set_ul_limit($client, $ulimit);
+							$ctbw{$client} = "$dlrate,$ulrate $dlimit,$ulimit";
+						}
+					} elsif (m!^CTSTATUS\s+(.*)!) {
+						my ($nhave,$ntotal,$dlrate,$ulrate,$dlimit,$ulimit);
+						my ($ntorrents,$avg_dl,$avg_ul,$change);
+						$ctstatus{$client} = $1;
+						$ctstime{$client} = time();
+						$ctstatus{$client} =~ m!^[\d:/]+ +(\d+)/(\d+)/\d+ +(\d+),(\d+) +\d+,\d+ +(\d+),(\d+)!;
+						($nhave,$ntotal,$dlrate,$ulrate,$dlimit,$ulimit) = 
+							($1, $2,     $3,     $4,     $5,     $6);
+						$totalpieces{$client} = $ntotal;
+
+						$ntorrents = scalar(keys %torrents);
+						$avg_dl = $tdlimit / $ntorrents;
+						$avg_ul = $tulimit / $ntorrents;
+						$change = 0;
+						if ($nhave >= $ntotal) {
+							if (!defined($sawseed{$client})) {
+								$sawseed{$client} = time();
+							} elsif (time() - $sawseed{$client} >= 300) {
+								if ($dlimit > 1) { $dlimit = 1; $change=1; }
+								$sharedl{$client}=$mindl{$client}=$maxdl{$client}=0;
+							}
+						}
+						# If lo rate & hi limit, immediately decrease if necessary.
+						# This will sometimes happen when not "necessary", but the
+						# client can get bandwidth back later if it needs it.
+						elsif ($dlrate < $avg_dl*.9 && $dlimit > $avg_dl &&
+								$dlimit > $mindl{$client}) {
+							if ($dlimit > $tdlimit - $alldl +
+									defined($ctbw{$client}) ? $dlrate : 0) {
+								$dlimit = &max($tdlimit - $alldl +
+									defined($ctbw{$client}) ? $dlrate : 0, $avg_dl);
+								$dlimit = &max($dlimit, $mindl{$client});
+								$change=1;
+							}
+						}
+						if ($ulrate < $avg_ul*.9 && $ulimit > $avg_ul &&
+								$ulimit > $minul{$client}) {
+							if ($ulimit > $tulimit - $allul +
+									defined($ctbw{$client}) ? $ulrate : 0) {
+								$ulimit = &max($tulimit - $allul +
+									defined($ctbw{$client}) ? $ulrate : 0, $avg_ul);
+								$ulimit = &max($ulimit, $minul{$client});
+								$change=1;
+							}
+						}
+						if ($change) {
+							&set_dl_limit($client, $dlimit);
+							&set_ul_limit($client, $ulimit);
+							&request_status($client);
+						} else {
+							&send_torrents();	# if %htclients
+						}
+						$ctbw{$client} = "$dlrate,$ulrate $dlimit,$ulimit";
+					} elsif (m!^CTDETAIL\s+(.*)!) {
+						$ctdetail{$client} = $1;
+					} elsif (m!^CTFILESTART! || m!^CTFILES\s*$!) {
+						delete $ctfiledata{$client};
+					} elsif (m!^CTFILE\s+((\d+) +.*)!) {
+						$ctfiledata{$client}{$2} = $1;
+					} elsif (m!^CTFILESDONE! || m!^CTFDONE!) {
+
+					} elsif (m!^CTPEERSTART! || m!^CTPEERS\s*$!) {
+						delete $ctpeer{$client};
+						$ctpeern{$client} = 0;
+					} elsif (m!^CTPEER\s+([^\s]+) +(.*)!) {
+						$ctpeer{$client}{$ctpeern{$client}} = "$1 $2";
+						++$ctpeern{$client}
+					} elsif (m!^CTPEERSDONE! || m!^CTPDONE!) {
+
+					} elsif (m!^CTINFO\s+(\d) (.*)!) {
+						unshift @{$ctinfo{$client}}, "$1 " . localtime() . " $2";
+					} elsif (m!^CTINFO\s+(.*)!) {
+						unshift @{$ctinfo{$client}}, localtime() . " $1";
+					}
+				} while(defined($_ = &getline($client)));
+			} else {
+				# peer disconnected
+				shutdown $cfh{$client}, 2;
+				close $cfh{$client};
+				delete $cfh{$client};
+				delete $clients2{$client};
+				if (defined $torrents{$client}) {
+					$dead{$client} = $torrents{$client};
+					delete $torrents{$client};
+					$dtime{$client} = time();
+					$ctbw{$client} =~ m!(\d+),(\d+) +(\d+),(\d+)!;
+					$alldl -= $1; $alldl = &max(0, $alldl);
+					$allul -= $2; $allul = &max(0, $allul);
+					delete $ctconfig{$client};
+					delete $ctfiledata{$client};
+					delete $ctpeer{$client};
+					delete $sawseed{$client};
+					# torrent status display expects these to be defined
+					$mindl{$client} = $maxdl{$client} = 0;
+					$minul{$client} = $maxul{$client} = 0;
+					$sharedl{$client} = $shareul{$client} = 1;
+					$maxratio{$client} = 0;
+				}
+				next;
+			}
+		}
+		if (vec($wout, fileno($cfh{$client}), 1)) {
+			--$nsock;
+		}
+		last if (!$nsock);
+	}
+}
+
+exit;
+}	# end of main block
+
+
+sub logmsg { print "@_ at ", scalar localtime, "\r\n" }
+
+
+sub do_accept {
+	my ($client,$server, $paddr,$port,$iaddr,$name, $packed_return_buffer, $foo);
+	local(*Client);
+	$server = shift();
+
+	$packed_return_buffer = 0;
+
+	$paddr = accept(Client,$server);
+	$client = *Client{IO};
+
+	($port,$iaddr) = sockaddr_in($paddr);
+	$name = gethostbyaddr($iaddr,AF_INET) || "unknown";
+
+	&logmsg("connection from $name [", inet_ntoa($iaddr), "] at port $port");
+
+	fcntl($client, F_GETFL, $packed_return_buffer);
+	fcntl($client, F_SETFL, O_NONBLOCK | $packed_return_buffer);
+
+	$foo = select($client);
+	$| = 1;
+	select $foo;
+
+	return $client;
+}
+
+
+sub getline {
+	my ($client, $theline, $l, $n, $tmp);
+	$client = shift();
+
+	$theline = "";
+	$n = 1;
+   $l = length($buffer{$client});
+	while ($n && $buffer{$client} !~ /[\r\n]/) {
+		if ($n = sysread($cfh{$client}, $tmp, 200)) {
+			$buffer{$client} .= $tmp;
+			$ioflag{$client} = 0;
+		}
+	}
+	if ($buffer{$client} =~ s/^[\r\n]*([^\r\n]+)[\r\n]+//) {
+		$theline = $1;
+	} else {
+		$buffer{$client} =~ s/^[\r\n]*//;
+		if ($l && !defined($n) && ($!==EAGAIN || $!==EWOULDBLOCK)) {
+			if ($ioflag{$client}) {
+				$theline = $buffer{$client};
+				$buffer{$client} = "";
+			} else {
+				$ioflag{$client} = 1;
+			}
+		}
+	}
+
+	return ($n || ($theline gt "")) ? $theline : undef
+}
+
+
+sub send_page {
+	my ($client,$page,$method) = @_;
+
+#	print "Sending $page\r\n";
+
+	$ctsentone{$client} = 0;
+
+	if ($page eq "/") { &send_page_root($client, $page); }
+	elsif ($page eq "/peers") { &send_page_root($client, $page); }
+	elsif ($page =~ m!^/torrent/([^/]+)/clearmsgs\??$!) {
+		&clearmsgs($client, $page);
+	}
+	elsif ($page =~ m!^/torrent/([^?]+)\?! && $protocol{$client} < 3) {
+		&change_torrent_get($client, $page);
+	}elsif ($page =~ m!^/torrent/(.*)!) {
+		if ($method =~ /POST/i) {
+			&change_torrent_post($client, $page);
+		} else {
+			&send_page_torrent($client, $page);
+		}
+	}
+	elsif ($page =~ m!^/tracker/([^?]+)\?!) { &change_tracker($client, $page); }
+	elsif ($page =~ m!^/files/(.*)!) { &change_files($client, $page); }
+	elsif ($page =~ m!^/\?!) { &change_root($client, $page); }
+	elsif ($page eq "/alimits") {
+		if ($method =~ /GET/i) {
+			&send_page_alimits($client, $page);
+		} elsif ($method =~ /POST/i) {
+			&change_alimits($client, $page);
+		}
+	}
+	elsif ($page eq "/dead") {
+		if ($method =~ /POST/i) {
+			&delete_dead($client, $page);
+		}
+	} else { &finish_page($client, "404"); }
+	return;
+}
+
+
+sub send_page_root {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my $ct; 
+
+	foreach $ct (keys %torrents) {
+		if ($page eq "/peers") {
+			&request_peers($ct);
+		}
+		&request_status($ct);
+	}
+
+	$alldl = $allul = 0;
+	foreach $ct (keys %torrents) {
+		if (defined($ctbw{$ct}) && $ctbw{$ct} =~ m!(\d+),(\d+) +(\d+),(\d+)!) {
+			$alldl += $1;
+			$allul += $2;
+		}
+	}
+
+	# to auto-refresh, put in HEAD, after TITLE
+	#    <META HTTP-EQUIV="Refresh" CONTENT="300">
+	#    <META HTTP-EQUIV="Pragma" CONTENT="no-cache">
+
+	print $cfh <<EOF =~ /[^\t]*\n/g;
+		HTTP/1.0 200 OK\r
+		Content-Type: text/html\r
+		\r
+		<HTML><HEAD><TITLE>CTCS - All Torrents</TITLE></HEAD><BODY>
+		<CENTER>
+		<H1><A HREF="http://www.rahul.net/dholmes/ctorrent/ctcs.html">
+		<I>CT</I>orrent <I>C</I>ontrol <I>S</I>erver</A></H1>
+		</CENTER>
+
+		<FORM METHOD=GET ACTION="/">
+		<CENTER><TABLE BORDER=0>
+EOF
+	printf $cfh "<TR><TD width=40%%>Current DL = <B>%d</B> K/s\n" .
+		"   <TD width=40%% align=right>DL Limit: " .
+		"<INPUT NAME=\"dlimit\" TYPE=\"text\" align=right SIZE=4 VALUE=\"%d\">" .
+		"K/s\n",
+		$alldl / 1024, $tdlimit / 1024;
+	print $cfh "   <TD width=20% ROWSPAN=3 align=right>" .
+		"<INPUT TYPE=\"submit\" VALUE=\"Change\">\n</TR>\n";
+	printf $cfh "<TR><TD>Current UL = <B>%d</B> K/s\n" .
+		"   <TD align=right>UL Limit: " .
+		"<INPUT NAME=\"ulimit\" TYPE=\"text\" align=right SIZE=4 VALUE=\"%d\">" .
+		"K/s\n</TR>\n",
+		$allul / 1024, $tulimit / 1024;
+	printf $cfh "<TR><TD><TD align=right>Change interval: " .
+		"<INPUT name=\"bwinterval\" type=\"text\" align=right size=3 " .
+		"value=\"%d\">sec</TR>\n",
+		$bwinterval;
+	print $cfh "</TABLE></CENTER></FORM>\n\n";
+	print $cfh "<CENTER><A HREF=\"/alimits\">Advanced Limits</A></CENTER>\n\n";
+
+	print $cfh "<BR><CENTER><HR width=50%><H2>Active Torrents</H2></CENTER>\n";
+	print $cfh ($page eq "/") ?
+		"<P><A HREF=\"/peers\">Show peers</A>\n" :
+		"<P><A HREF=\"/\">Hide peers</A>\n";
+
+	$htclients{$client} = $page;
+	&send_torrents();
+	return;
+}
+
+
+sub send_dead() {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my ($ct,$tnum);
+
+	print $cfh <<EOF =~ /[^\t]*\n/g;
+		<FORM METHOD=POST ACTION="/dead">
+		<TABLE BORDER width=100%>
+		<TR bgcolor="#cccccc"><TD colspan=5>[Del] <B>Torrent</B>
+			<TD colspan=3 align=right>End Time</TR>
+		<TR bgcolor="#cccccc"><TD>Seed<TD>Leech<TD>Complete
+			<TD align=right>DL Rate<TD align=right>UL Rate
+			<TD align=right>DL Total<TD align=right>UL Total
+			<TD align=right>Limit D/U</TR>
+EOF
+
+	$tnum = 0;
+	foreach $ct (keys %dead) {
+		++$tnum;
+		&send_one_torrent($client, $page, $ct, $tnum);
+	}
+	print $cfh <<EOF =~ /[^\t]*\n/g;
+		</TABLE>
+		<TABLE BORDER=0 width=100%><TR>
+		   <TD align=left><input type=submit name=submit value="Delete">
+		   <TD align=right><input type=submit name=submit value="Delete All">
+		</TABLE>\n</FORM>
+EOF
+}
+
+
+sub delete_dead() {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my ($delay,$data,$ct,$foo,$tnum,$tid,$len);
+	my $dbuf = "";
+
+	# POST request
+	$delay=0;
+	do {
+		if (defined($data = &getline($client))) {
+			if ($data =~ /Content-length:\s+(\d+)/i) {
+				$len = $1;
+			}
+			elsif ($data !~ /:\s/) {
+				$dbuf .= $data;
+			}
+		} else {
+			++$delay;
+			sleep 1;
+		}
+	} until ( (defined($len) && length($dbuf) >= $len) ||
+				(!defined($len) && $dbuf =~ /t1id=/) || $delay==$bwinterval );
+
+	if ($dbuf =~ /submit=Delete\+All/) {
+		foreach $foo (keys %dead) {
+			&dealloc_torrent($foo);
+		}
+	} else {
+		while ($dbuf =~ /t(\d+)id=([^&]+)/ig) {
+			($tnum,$tid) = ($1, &url_decode_data(&url_decode_data($2)));
+			$ct = "";
+			foreach $foo (keys %dead) {
+				$ct = $foo if ($tid eq $dead{$foo});
+			}
+			next if (!$ct);
+			if ($dbuf =~ /t${tnum}del=\d/i) {
+				&dealloc_torrent($ct);
+			}
+		}
+	}
+
+	print $cfh "HTTP/1.0 302 See Other\r\n";
+	print $cfh "Location: /\r\n";
+	&finish_page($client, "");
+}
+
+
+sub dealloc_torrent() {
+	my ($ct) = @_;
+	delete $torrents{$ct};
+	delete $stime{$ct};
+	delete $dead{$ct};
+	delete $dtime{$ct};
+	delete $ctconfig{$ct};
+	delete $ctfile{$ct};
+	delete $ctbw{$ct};
+	delete $ctstatus{$ct};
+	delete $ctstime{$ct};
+	delete $ctdetail{$ct};
+	delete $ctinfo{$ct};
+	delete $ctinfoclear{$ct};
+	delete $ctfiledata{$ct};
+	delete $ctpeer{$ct};
+	delete $buffer{$ct};
+	delete $mindl{$ct};
+	delete $maxdl{$ct};
+	delete $minul{$ct};
+	delete $maxul{$ct};
+	delete $sharedl{$ct};
+	delete $shareul{$ct};
+	delete $maxratio{$ct};
+	delete $realmax{$ct};
+	delete $pdlrate{$ct};
+	delete $pulrate{$ct};
+	delete $protocol{$ct};
+}
+
+
+sub send_torrents {
+	my ($client,$cfh,$page,$nleft,$ct);
+
+	foreach $client (keys %htclients) {
+		$current_client = $client;
+		$cfh = $cfh{$client};
+		$page = $htclients{$client};
+		$nleft = 0;
+		foreach $ct (keys %torrents) {
+			if ($page =~ m!^/torrent/(.*)! &&
+				 &url_decode_data($1) ne $torrents{$ct}) {
+				$ctsent{$ct}{$client} = 1;	# wrong torrent--don't send
+			}
+			if (!$ctsent{$ct}{$client}) { ++$nleft; }
+			if (defined($ctstatus{$ct}) && $ctstime{$ct} >= time()-1 &&
+					!$ctsent{$ct}{$client}) {	# not sent to this http client yet
+				if (!$ctsentone{$client}) {
+					if ($page =~ m!^/torrent/!) {
+						&send_detail($client, $page, $ct);
+					}
+					print $cfh <<EOF =~ /[^\t]*\n/g;
+						<P>
+						<TABLE BORDER width=100%>
+						<TR bgcolor="#cccccc"><TD colspan=5><B>Torrent</B>
+						   <TD colspan=3 align=right>Start Time</TR>
+						<TR bgcolor="#cccccc"><TD>Seed<TD>Leech<TD>Complete
+						   <TD align=right>DL Rate<TD align=right>UL Rate
+						   <TD align=right>DL Total<TD align=right>UL Total
+						   <TD align=right>Limit D/U</TR>
+EOF
+					$ctsentone{$client} = 1;
+				}
+				&send_one_torrent($client, $page, $ct, 0);
+				$ctsent{$ct}{$client} = 1;
+				--$nleft;
+			}
+		}
+		&finish_page($client,
+				defined($htclients{$client}) ? $htclients{$client} : "")
+			if ($nleft == 0);
+	}
+	$current_client = "";
+}
+
+
+sub send_detail() {
+	my ($client,$page,$ct) = @_;
+	my $cfh = $cfh{$client};
+	my ($dlrate,$ulrate,$dl,$ul,
+			$seeders,$tseed,$leechers,$tleech,$connecting,
+			$nhave,$ntotal,$navail,$dlimit,$ulimit,$cacheused);
+	my ($torrentsize,$piecelen,$timenow,$timeseed,$foo,$sdl);
+	my ($v,$e,$E,$M,$m,$n,$Z,$Pz,$Qz,$C,$X,$o1,$o2,$o3,$o4,$o5);
+	my ($fileno,$fnp,$fnh,$fna,$fpri,$fnum,$fsize,$fname,$szunit,$curpri);
+	my $totalsize=0;
+	my $action;
+
+	if ($protocol{$ct} == 1) {
+		$ctstatus{$ct} =~
+			m!(\d+)/(\d+) +(\d+)/(\d+)/(\d+) +(\d+),(\d+) +(\d+),(\d+) +(\d+),(\d+)!;
+		($seeders,$leechers,$connecting,$nhave,$ntotal,$navail,$dlrate,$ulrate,
+			$dl,$ul,$dlimit,$ulimit) = 
+			($1,   $2,       0,          $3,    $4,     $5,     $6,     $7,
+			$8, $9, $10,    $11);
+	} else {
+		$ctstatus{$ct} =~
+			m!(\d+):(\d+)/(\d+):(\d+)/(\d+) +(\d+)/(\d+)/(\d+) +(\d+),(\d+) +(\d+),(\d+) +(\d+),(\d+) +(\d+)!;
+		($seeders,$tseed,$leechers,$tleech,$connecting,$nhave,$ntotal,$navail,
+			$dlrate,$ulrate,$dl,$ul,$dlimit,$ulimit,$cacheused) = 
+			($1,   $2,    $3,       $4,     $5,         $6,    $7,     $8,
+			$9,     $10,    $11,$12,$13,    $14,    $15);
+	}
+
+	if( $protocol{$ct} >= 3 && defined($ctconfig{$ct}) ){
+		($v,$e,$E,$M,$m,$n,$C,$Pz,$X,$o1,$o2,$o3,$o4,$o5) = &config_values($ct);
+		$Qz = 0;
+	}elsif ( defined($ctconfig{$ct}) && $protocol{$ct} == 1 && $ctconfig{$ct} =~
+			m!([01]) (\d+) ([.\d]+) (\d+) (\d+) (\d+) ([01]) ([01]) ([01])! ) {
+		($v,$e,$E,$M,$m,$n,$Z,$Pz,$Qz) = ($1,$2,$3,$4,$5,$6,$7,$8,$9);
+	}elsif ( defined($ctconfig{$ct}) && $ctconfig{$ct} =~
+			m!([01]) (\d+) ([.\d]+) (\d+) (\d+) (\d+) (\d+) ([01])! ) {
+		($v,$e,$E,$M,$m,$n,$C,$Pz,$Qz) = ($1,$2,$3,$4,$5,$6,$7,$8,0);
+	}
+	if (defined($ctdetail{$ct}) &&
+			$ctdetail{$ct} =~ m!(\d+) +(\d+) +(\d+) +(\d+)!) {
+		($torrentsize,$piecelen,$timenow,$timeseed) = ($1,$2,$3,$4);
+	} else { ($torrentsize,$piecelen,$timenow,$timeseed) = (0, 0, 0, 0); }
+
+	print $cfh "<P><CENTER>\n";
+	$sdl = ($dl > 0) ? $dl : $torrentsize;
+	printf $cfh "Upload/Download Ratio:  <B>%s</B>\n",
+		($sdl > 0) ? sprintf("%.2f", $ul / $sdl) : "Unknown";
+
+	if (defined($dead{$ct})) {
+		print $cfh "<BR>Torrent has <B>terminated</B>\n";
+	} elsif (defined($ctdetail{$ct})) {
+		if (defined($ctconfig{$ct}) && ($nhave >= $ntotal || $timeseed > 0)) {
+			if ($e==0 && $ulrate==0) {
+				printf $cfh "<BR>Seeding is <B>stalled</B>\n";
+			} else {
+				$foo = ($e > 0) ?
+					$e*60 - (($protocol{$ct} >= 3) ? 0 : ($timenow-$timeseed)/60) :
+					($E * $sdl - $ul) / $ulrate / 60	;
+				printf $cfh "<BR>Seed time remaining: <B>%s%s</B>%s\n",
+					($foo >= 60) ? sprintf(" %d hours", $foo/60) : "",
+					($foo % 60 > 0) ? sprintf(" %d minutes", $foo % 60) : "",
+					($e > 0) ? "" : " (estimated)";
+			}
+		} elsif ($nhave < $ntotal) {
+			if ($dlrate > 0) {
+				$foo = (($ntotal-$nhave)*$piecelen / $dlrate) / 60;
+				printf $cfh "<BR>Download time remaining: <B>%s%s</B>\n",
+					($foo >= 60) ? sprintf(" %d hours", $foo/60) : "",
+					($foo % 60 > 0) ? sprintf(" %d minutes", $foo % 60) : "";
+			} else {
+				print $cfh "<BR>Download is <B>stalled</B>\n";
+			}
+		}
+	}
+	print $cfh "</CENTER>\n\n";
+
+	if( $protocol{$ct} >= 3 && defined($ctconfig{$ct}) ){
+		printf $cfh "<P><FORM METHOD=POST ACTION=\"%s\">\n", $page;
+		printf $cfh "<CENTER><TABLE BORDER>\n" .
+			"<TR bgcolor=\"cccccc\">" .
+			"<TD colspan=3 align=center>Configuration</TR>\n";
+		foreach my $name (split(/ +/,$ctconfigvars{$ct})) {
+			my $type = $ctconfig{$ct}{$name}{"type"};
+			my $value = $ctconfig{$ct}{$name}{"value"};
+			my $range = $ctconfig{$ct}{$name}{"range"};
+			printf $cfh "<TR><TD>%s\n" .
+				"   <TD%s%s align=center>" .
+				"<INPUT type=\"%s\"%s name=\"%s\" value=\"%s\"%s>\n" .
+				"   %s</TR>\n",
+				$ctconfig{$ct}{$name}{"sdesc"},
+				($name eq "verbose" && $value > 0) ? " bgcolor=\"#ffbb22\"" :
+					($name eq "cache" && $cacheused >= $value*1024) ?
+						" bgcolor=\"#ffbb22\"" :
+					($name eq "pause" && $value > 0) ? " bgcolor=\"#ffbb22\"" :
+					($name eq "file_list" && $value && $value ne "0") ?
+						" bgcolor=\"#ccccff\"" : "",
+				($type eq "S") ? " colspan=2" : "",
+				($type eq "B") ? "checkbox" : "text",
+				($type eq "S") ?
+					sprintf(" size=%d%s", &min($range?$range:30,
+							&max(length($value), 30)),
+						$range ? sprintf(" maxlength=%d", $range) : "") :
+					($type eq "B") ? "" : " size=5",
+				$name, $value,
+				($type eq "B" && $value > 0) ? " checked" : "",
+				($type eq "S") ? "" :
+					sprintf("<TD>%s", $ctconfig{$ct}{$name}{"ldesc"});
+		}
+		print $cfh "<TR><TD colspan=3 align=center>" .
+			"<INPUT TYPE=\"submit\" NAME=\"ctconfig\" VALUE=\"Submit\"></TR>\n" .
+			"</TABLE></CENTER></FORM>\n\n";
+	}elsif (defined $ctconfig{$ct}) {
+		printf $cfh "<P><FORM METHOD=GET ACTION=\"%s\">\n", $page;
+		printf $cfh "<CENTER><TABLE BORDER>\n" .
+			"<TR bgcolor=\"cccccc\">" .
+			"<TD colspan=3 align=center>Configuration</TR>\n";
+		printf $cfh "<TR><TD>Verbose output [-v]\n" .
+			"   <TD%s align=center>" .
+			"<INPUT type=\"checkbox\" name=\"v\" value=%d %s>\n" .
+			"   <TD>%s</TR>\n",
+			$v ? " bgcolor=\"#ffbb22\"" : "",
+			$v, $v ? "checked" : "", $v ? "enabled" : "disabled";
+		printf $cfh "<TR><TD>Seed time [-e]\n" .
+			"   <TD align=right>" .
+			"<INPUT type=\"text\" align=right size=3 name=\"e\" value=\"%.0f\">" .
+			"\n" .
+			"   <TD>~hours remaining (-e %d)</TR>\n",
+			&max(0, $timeseed ? $e - ($timenow-$timeseed)/3600 : $e), $e;
+		printf $cfh "<TR><TD>Seed ratio [-E]\n" .
+			"   <TD align=right>" .
+			"<INPUT type=\"text\" align=right size=5 name=\"E\" value=\"%s\">\n" .
+			"   <TD></TR>\n",
+			sprintf("%.2f", $E ? $E : 0) + 0;
+		printf $cfh "<TR><TD>Max peers [-M]\n" .
+			"   <TD align=right>" .
+			"<INPUT type=\"text\" align=right size=3 name=\"M\" value=\"%d\">\n" .
+			"   <TD>Current peers: %d</TR>\n",
+			$M, $seeders+$leechers+$connecting;
+		printf $cfh "<TR><TD>Min peers [-m]\n" .
+			"   <TD align=right>" .
+			"<INPUT type=\"text\" align=right size=3 name=\"m\" value=\"%d\">\n" .
+			"   <TD>Current peers: %d</TR>\n",
+			$m, $seeders+$leechers+$connecting;
+		if ($nhave < $ntotal) {
+			printf $cfh "<TR><TD>Downloading file [-n]\n" .
+				"   <TD%s align=right>" .
+				"<INPUT type=\"text\" align=right size=3 name=\"n\" " .
+				"value=\"%d\">\n" .
+				"   <TD>\"0\" for full torrent</TR>\n",
+				$n ? " bgcolor=\"#ccccff\"" : "", $n;
+		}
+		if ($protocol{$ct} >= 2) {
+			printf $cfh "<TR><TD>Cache size [-C]\n" .
+				"   <TD%s align=right>" .
+				"<INPUT type=\"text\" align=right size=3 name=\"C\" " .
+				"value=\"%d\">\n" .
+				"   <TD>MB; %dKB now in use</TR>\n",
+				($C && $cacheused >= $C*1024) ? " bgcolor=\"#ffbb22\"" : "",
+				$C, $cacheused;
+		}
+		printf $cfh "<TR><TD>Pause torrent\n" .
+			"   <TD%s align=center>" .
+			"<INPUT type=\"checkbox\" name=\"pause\" value=%d %s>\n" .
+			(($protocol{$ct} == 1) ?
+				"   <TD>Refuse new peers & wait</TR>\n" :
+				"   <TD>Stop upload/download</TR>\n"),
+			($Pz+$Qz) ? " bgcolor=\"#ffbb22\"" : "",
+			$Pz+$Qz > 0, ($Pz+$Qz) ? "checked" : "";
+		if ($protocol{$ct} == 1) {
+			printf $cfh "<TR><TD>Stop when peers=0\n" .
+				"   <TD%s align=center>" .
+				"<INPUT type=\"checkbox\" name=\"exitzero\" value=%d %s>\n" .
+				"   <TD>Terminate torrent if I have no peers</TR>\n",
+				($Z+$Qz) ? " bgcolor=\"#ffbb22\"" : "",
+				$Z+$Qz > 0, ($Z+$Qz) ? "checked" : "";
+		}
+
+		print $cfh "<TR><TD colspan=3 align=center>" .
+			"<INPUT TYPE=\"submit\" VALUE=\"Submit\"></TR>\n" .
+			"</TABLE></CENTER></FORM>\n\n";
+	}
+
+	if (!defined($dead{$ct})) {
+		$action = $page; $action =~ s/torrent/tracker/;
+		printf $cfh "<P><FORM METHOD=GET ACTION=\"%s\">\n", $action;
+		print $cfh <<EOF =~ /[^\t]*\n/g;
+			<CENTER><TABLE BORDER>
+			<TR bgcolor="#cccccc"><TD colspan=3 align=center>Actions</TR>
+			<TR><TD>Update
+			   <TD align=center>
+			   <INPUT type="radio" name="tracker" value="update" checked>
+			   <TD>Update tracker stats &amp; get peers</TR>
+			<TR><TD>Restart
+			   <TD align=center><INPUT type="radio" name="tracker" value="restart">
+			   <TD>Restart the tracker session</TR>
+			<TR><TD>Terminate
+			   <TD align=center bgcolor="#ff6666">
+			   <INPUT type="radio" name="tracker" value="quit">
+			   <TD>Stop torrent (quit)</TR>
+			<TR><TD colspan=3 align=center><INPUT TYPE="submit" VALUE="Perform">
+			</TR></TABLE></CENTER></FORM>
+
+EOF
+	}
+
+	if ($ctinfo{$ct}) {
+		my $sev = 3;
+		my $psev;
+		foreach my $msg (@{$ctinfo{$ct}}) {
+			if ($msg =~ /^(\d) (.*)/) { $psev = $1; }
+			else { $psev = 2; }
+			if ($psev && $psev < $sev) {
+				$sev = $psev;
+				last if ($sev == 1);
+			}
+		}
+		printf $cfh "<P><FORM METHOD=GET ACTION=\"%s/clearmsgs\">\n", $page;
+		printf $cfh "<CENTER><TABLE BORDER>\n" .
+			"<TR %s><TD align=center>Messages</TD></TR>",
+			($sev==1 || $sev==2) ? "bgcolor=\"#cccccc\"" : "bgcolor=\"#ffff66\"";
+
+		$sev = -1;
+		foreach my $msg (@{$ctinfo{$ct}}) {
+			if ($msg =~ /^(\d) (.*)/) {
+				if ($1 != $sev) {
+					printf $cfh "</PRE></TD></TR>\n" if ($sev >= 0);
+					$sev = $1;
+					printf $cfh "<TR%s><TD align=left>" .
+						"<PRE style=\"margin-bottom:0\">\n",
+						($sev==1) ? " bgcolor=\"#ff6666\"" :
+						($sev==2) ? " bgcolor=\"#ffff66\"" : "";
+				}
+				print $cfh "$2\n";
+			} else {
+				if ($sev != 0) {
+					print $cfh "<TR><TD align=left>" .
+						"<PRE style=\"margin-bottom:0\">\n";
+				}
+				$sev = 0;
+				print $cfh "$msg\n";
+			}
+		}
+		print $cfh "</PRE></TD></TR>\n";
+		$ctinfoclear{$ct} = $#{$ctinfo{$ct}};
+		print $cfh <<EOF =~ /[^\t]*\n/g;
+			</TR>
+			<TR><TD align=center><INPUT TYPE=\"submit\" VALUE=\"Clear\"></TR>
+			</TABLE></CENTER></FORM>
+
+EOF
+	}
+
+	if (keys %{$ctfiledata{$ct}}) {
+		print $cfh "<P>\n";
+		if ($protocol{$ct} >= 3 && $nhave < $ntotal) {
+			$action = $page; $action =~ s/torrent/files/;
+			printf $cfh "<FORM METHOD=POST ACTION=\"%s\">\n", $action;
+		}
+		print $cfh <<EOF =~ /[^\t]*\n/g;
+			<CENTER><TABLE BORDER>
+			<TR bgcolor="#cccccc"><TD align=right>File
+			   <TD>Name<TD align=right>Size<TD align=right>Complete
+EOF
+		if ($nhave < $ntotal) {
+			printf $cfh "%s%s",
+				($protocol{$ct} >= 2) ? "   <TD align=right>Available" : "",
+				($protocol{$ct} >= 3) ? "<TD align=center>Priority" : "";
+		}
+		print $cfh "</TR>\n";
+		foreach $fileno (sort {$::a <=> $::b} keys %{$ctfiledata{$ct}}) {
+			if ($protocol{$ct} >= 3) {
+				$fpri = 0;
+				$ctfiledata{$ct}{$fileno} =~
+					/(\d+) (\d+) +(\d+) +(\d+) +(\d+) +(\d+) +(\d+) +(.*)/;
+				($fnum,$fpri,$curpri,$fnp,$fnh,$fna,$fsize,$fname) =
+					($1,$2,$3,$4,$5,$6,$7,$8);
+			} elsif ($protocol{$ct} == 2) {
+				$ctfiledata{$ct}{$fileno} =~
+					/(\d+) +(\d+) +(\d+) +(\d+) +(\d+) +(.*)/;
+				($fnum,$fnp,$fnh,$fna,$fsize,$fname) = ($1,$2,$3,$4,$5,$6);
+			} else {
+				$ctfiledata{$ct}{$fileno} =~ /(\d+) +(\d+) +(\d+) +(\d+) +(.*)/;
+				($fnum,$fnp,$fnh,$fna,$fsize,$fname) = ($1,$2,$3,$2,$4,$5);
+			}
+			$totalsize += $fsize;
+			$szunit = &unit($fsize);
+			$fsize = &value($fsize, $szunit);
+			printf $cfh "<TR%s>",
+				(($protocol{$ct}>=3 && $curpri && $curpri==$fpri) ||
+					($protocol{$ct}<=2 && $n==$fnum)) ? " bgcolor=\"#ccccff\"" :
+				($fna==0 && $fnp) ? " bgcolor=\"#ffcccc\"" :
+				($fnh==$fna)      ? " bgcolor=\"#ccffcc\"" :
+				($fna < $fnp)     ? " bgcolor=\"#ffff99\"" : "";
+			printf $cfh "<TD align=right>%d" .
+				"<TD>%s\n" .
+				"   <TD align=right>%d&nbsp;%1s" .
+				"<TD align=right>%d%%",
+				$fnum,
+				&html_safe($fname),
+				$fsize, $szunit,
+				$fnp ? 100 * $fnh / $fnp : 0;
+			if ($nhave < $ntotal) {
+				if ($protocol{$ct} >= 2) {
+					printf $cfh "<TD%s align=right>%d%%",
+						($fna==0 && $fnp) ? " bgcolor=\"#ffcccc\"" :
+						($fna < $fnp)     ? " bgcolor=\"#ffff99\"" : "",
+						$fnp ? 100 * $fna / $fnp : 0;
+				}
+				if ($protocol{$ct} >= 3) {
+					printf $cfh "<TD align=center>" .
+						"<INPUT type=\"text\" name=\"f%dpri\" size=5 value=\"%s\">",
+						$fnum, ($fpri > 0) ? $fpri : "";
+				}
+			}
+			printf $cfh "</TR>\n";
+		}
+		$szunit = &unit($totalsize);
+		$totalsize = &value($totalsize, $szunit);
+		printf $cfh "<TR><TD colspan=2>Total<TD align=right>%d&nbsp;%1s",
+			$totalsize, $szunit;
+		if ($protocol{$ct} >= 3 && $nhave < $ntotal) {
+			print $cfh "<TD colspan=2><TD align=center>" .
+				"<INPUT TYPE=\"submit\" VALUE=\"Set\">";
+		}
+		print $cfh "</TR>\n";
+		printf $cfh "</TABLE></CENTER>%s\n\n",
+			($protocol{$ct} >= 3 && $nhave < $ntotal) ? "</FORM>" : "";
+	}
+}
+
+
+sub send_one_torrent() {
+	my ($client,$page,$ct,$tnum) = @_;
+	my $cfh = $cfh{$client};
+	my ($peerid,$addr,$dchoke,$uchoke,$dlrate,$ulrate,$dl,$ul,
+			$pieces,$seeders,$tseed,$leechers,$tleech,$connecting,
+			$nhave,$ntotal,$navail,$dlimit,$ulimit,$cacheused,
+			$peer,$drunit,$urunit,$dlunit,$ulunit,$ctclient);
+	my $ctime;
+	my $foo;
+
+	if ($protocol{$ct} == 1) {
+		$ctstatus{$ct} =~
+			m!(\d+)/(\d+) +(\d+)/(\d+)/(\d+) +(\d+),(\d+) +(\d+),(\d+) +(\d+),(\d+)!;
+		($seeders,$leechers,$connecting,$nhave,$ntotal,$navail,$dlrate,$ulrate,
+			$dl,$ul,$dlimit,$ulimit) = 
+			($1,   $2,       0,          $3,    $4,     $5,     $6,     $7,
+			$8, $9, $10,    $11);
+	} else {
+		$ctstatus{$ct} =~
+			m!(\d+):(\d+)/(\d+):(\d+)/(\d+) +(\d+)/(\d+)/(\d+) +(\d+),(\d+) +(\d+),(\d+) +(\d+),(\d+) +(\d+)!;
+		($seeders,$tseed,$leechers,$tleech,$connecting,$nhave,$ntotal,$navail,
+			$dlrate,$ulrate,$dl,$ul,$dlimit,$ulimit,$cacheused) = 
+			($1,   $2,    $3,       $4,     $5,         $6,    $7,     $8,
+			$9,     $10,    $11,$12,$13,    $14,    $15);
+	}
+
+	$drunit = &unit($dlrate); $dlrate = &value($dlrate, $drunit);
+	$urunit = &unit($ulrate); $ulrate = &value($ulrate, $urunit);
+	$dlunit = &unit($dl);     $dl = &value($dl, $dlunit);
+	$ulunit = &unit($ul);     $ul = &value($ul, $ulunit);
+
+	my $sev = 3;
+	if ($ctinfo{$ct}) {
+		my $psev;
+		foreach my $msg (@{$ctinfo{$ct}}) {
+			if ($msg =~ /^(\d) (.*)/) { $psev = $1; }
+			else { $psev = 2; }
+			if ($psev && $psev < $sev) {
+				$sev = $psev;
+				last if ($sev == 1);
+			}
+		}
+	}
+	printf $cfh "\n<TR bgcolor=\"#ccccff\"><TD%s colspan=5>",
+		$ctinfo{$ct} ?
+			( ($sev==1) ? " bgcolor=\"#ff6666\"" :
+			  ($sev==2) ? " bgcolor=\"#ffff66\"" : "" ) : "";
+	if (defined $dead{$ct}) {
+		if ($page eq "/" || $page eq "/peers") {
+			printf $cfh "<input type=hidden name=\"t%did\" value=\"%s\">" .
+				"<input type=checkbox name=\"t%ddel\" value=1> ",
+				$tnum, &url_encode_data($dead{$ct}), $tnum;
+		}
+		$ctime = localtime($dtime{$ct});	# need for scalar context
+	} else {
+		$ctime = $stime{$ct} ? localtime($stime{$ct}) : "Unknown";
+	}
+	printf $cfh "%s<A HREF=\"/torrent/%s\"><B>%s</B></A>\n",
+		$ctinfo{$ct} ? "<B>! </B>" : "",
+		&url_encode_data( $torrents{$ct} ? $torrents{$ct} : $dead{$ct} ),
+		&html_safe($ctfile{$ct});
+
+	printf $cfh "   <TD colspan=3 align=right>%s</TR>\n", $ctime;
+
+	if ($protocol{$ct} == 1) {
+		printf $cfh "<TR%s><TD>S: %d<TD>L: %d",
+			(($page eq "/peers" || $page =~ m!^/torrent/!) &&
+				defined($ctpeer{$ct})) ?  " bgcolor=\"#ccccff\"" : "",
+			$seeders, $leechers;
+	} else {
+		printf $cfh "<TR%s><TD>S: %d/%d<TD>L: %d/%d%s",
+			(($page eq "/peers" || $page =~ m!^/torrent/!) &&
+				defined($ctpeer{$ct})) ?  " bgcolor=\"#ccccff\"" : "",
+			$seeders, $tseed, $leechers, $tleech,
+			$connecting ? " +$connecting" : "";
+	}
+	printf $cfh "<TD>%3d%%", $ntotal ? $nhave/$ntotal*100 : 0;
+	if ($nhave != $ntotal) {
+		printf $cfh " (%d%% Avail)", $ntotal ? $navail/$ntotal*100 : 0;
+	}
+	printf $cfh "\n   <TD align=right>D= %.0f %1s/s" .
+		"<TD align=right>U= %.0f %1s/s\n",
+		$dlrate,$drunit,$ulrate,$urunit;
+	printf $cfh "   <TD align=right>D= %.0f&nbsp;%1s" .
+		"<TD align=right>U= %.0f&nbsp;%1s\n",
+		$dl,$dlunit,$ul,$ulunit;
+	printf $cfh "   <TD%s align=right>%.0f / %.0f K/s</TR>\n\n",
+		(($sharedl{$ct} || $nhave >= $ntotal) && $shareul{$ct}) ?
+			( ($mindl{$ct}||$minul{$ct}||$maxdl{$ct}||$maxul{$ct}||
+				$maxratio{$ct}) ? " bgcolor=\"#ffff66\"" : "" ) :
+			" bgcolor=\"#66ff66\"",
+		$dlimit/1024, $ulimit/1024;
+
+	if (($page eq "/peers" || $page =~ m!^/torrent/!) && defined($ctpeer{$ct})) {
+		foreach $peer (sort {$a <=> $b} keys %{$ctpeer{$ct}}) {
+			$ctpeer{$ct}{$peer} =~
+				/([^ ]+) +([\d.:]+) +([CU][in])([CU][in]) +(\d+) +(\d+) +(\d+) +(\d+) +(\d+)/;
+			($peerid,$addr,$dchoke,$uchoke,$dlrate,$ulrate,$dl,$ul,$pieces) =
+				($1,     $2, $3,    $4,     $5,     $6,     $7, $8, $9);
+
+			$ctclient = &clienttype($peerid,
+				$torrents{$ct} ? $torrents{$ct} : $dead{$ct});
+			$drunit = &unit($dlrate); $dlrate = &value($dlrate, $drunit);
+			$urunit = &unit($ulrate); $ulrate = &value($ulrate, $urunit);
+			$dlunit = &unit($dl);     $dl = &value($dl, $dlunit);
+			$ulunit = &unit($ul);     $ul = &value($ul, $ulunit);
+
+			printf $cfh "<TR bgcolor=\"#ccffcc\">" .
+				"<TD colspan=5>%s<TD colspan=2 align=center>%s<TD>%s</TR>\n",
+				&html_safe($peerid), $addr, &html_safe($ctclient);
+
+			printf $cfh "<TR><TD%s align=center>%2s<TD%s align=center>%2s\n",
+#				($dchoke =~ /n/) ? " bgcolor=\"#e5e5e5\"" : "", $dchoke,
+				($dchoke =~ /n/) ? " bgcolor=\"#909090\"" :
+				($dchoke =~ /C/) ? " bgcolor=\"#d0d0d0\"" : "", $dchoke,
+#				($uchoke =~ /n/) ? " bgcolor=\"#e5e5e5\"" : "", $uchoke;
+				($uchoke =~ /n/) ? " bgcolor=\"#909090\"" :
+				($uchoke =~ /C/) ? " bgcolor=\"#d0d0d0\"" : "", $uchoke;
+			my $pct = $totalpieces{$ct} ?
+				int($pieces / $totalpieces{$ct} * 100) : 0;
+			printf $cfh "   <TD bgcolor=\"#ff%.2x%.2x\" align=right>%3d%%\n",
+				($pct-$pct%5)*2.55, ($pct-$pct%5)*2.55, $pct;
+			printf $cfh "   <TD%s align=right>%s<TD%s align=right>%s\n",
+				($dlrate==0) ? "" : (" bgcolor=" .
+					(($drunit =~ /M/) ? "\"#f5e5ff\"" :
+					 ($drunit =~ /K/) ? "\"#e0bbff\"" : "\"#cc88ff\"")),
+				$dlrate ? sprintf("D= %d&nbsp;%1s/s", $dlrate,$drunit) : "-",
+				($ulrate==0) ? "" : (" bgcolor=" .
+					(($urunit =~ /M/) ? "\"#f5e5ff\"" :
+					 ($urunit =~ /K/) ? "\"#e0bbff\"" : "\"#cc88ff\"")),
+				$ulrate ? sprintf("U= %d&nbsp;%1s/s", $ulrate,$urunit) : "-";
+			printf $cfh "   <TD%s align=right>%s<TD%s align=right>%s</TR>\n",
+				($dl==0) ? "" : (" bgcolor=" .
+					(($dlunit =~ /M/) ? "\"#f5e5ff\"" :
+					 ($dlunit =~ /K/) ? "\"#e0bbff\"" : "\"#cc88ff\"")),
+				$dl ? sprintf("D= %d&nbsp;%1s", $dl,$dlunit) : "-",
+				($ul==0) ? "" : (" bgcolor=" .
+					(($ulunit =~ /M/) ? "\"#f5e5ff\"" :
+					 ($ulunit =~ /K/) ? "\"#e0bbff\"" : "\"#cc88ff\"")),
+				$ul ? sprintf("U= %d&nbsp;%1s", $ul,$ulunit) : "-";
+		}
+	}	#peers
+	return;
+}
+
+
+sub send_page_torrent() {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my ($id,$ct,$foo);
+
+	$page =~ m!^/torrent/(.*)!;
+	$id = &url_decode_data($1);
+
+	$ct = "";
+	foreach $foo (keys %torrents) {
+		$ct = $foo if ($id eq $torrents{$foo});
+	}
+	if (!$ct) {
+		foreach $foo (keys %dead) {
+			$ct = $foo if ($id eq $dead{$foo});
+		}
+	}
+	if (!$ct) { &finish_page($client, "404"); return; }
+
+	print $cfh <<EOF =~ /[^\t]*\n/g;
+		HTTP/1.0 200 OK\r
+		Content-Type: text/html\r
+		\r
+		<HTML><HEAD><TITLE>CTCS - Torrent Details</TITLE></HEAD><BODY>
+
+		<A HREF="/">Return to All Torrents</A>
+EOF
+
+	if (defined($dead{$ct})) {
+		&send_detail($client, $page, $ct);
+		print $cfh <<EOF =~ /[^\t]*\n/g;
+						<P>
+						<TABLE BORDER width=100%>
+						<TR bgcolor="#cccccc"><TD colspan=5><B>Torrent</B>
+						   <TD colspan=3 align=right>End Time</TR>
+						<TR bgcolor="#cccccc"><TD>Seed<TD>Leech<TD>Complete
+						   <TD align=right>DL Rate<TD align=right>UL Rate
+						   <TD align=right>DL Total<TD align=right>UL Total
+						   <TD align=right>Limit D/U</TR>
+EOF
+		&send_one_torrent($client, $page, $ct, 0);
+		&finish_page($client, $page);
+	} else {
+		$htclients{$client} = $page;
+		&request_detail($ct);
+		&request_config($ct);
+		&request_peers($ct);
+		&request_status($ct);
+	}
+}
+
+
+sub clearmsgs() {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my ($id,$ct,$foo);
+
+	$page =~ m!^/torrent/([^/]+)/clearmsgs\??$!;
+	$id = &url_decode_data($1);
+
+	$ct = "";
+	foreach $foo (keys %torrents) {
+		$ct = $foo if ($id eq $torrents{$foo});
+	}
+	if (!$ct) {
+		foreach $foo (keys %dead) {
+			$ct = $foo if ($id eq $dead{$foo});
+		}
+	}
+	if (!$ct) { &finish_page($client, "404"); return; }
+
+	if ($#{$ctinfo{$ct}} == $ctinfoclear{$ct}) {
+		delete $ctinfo{$ct};
+	} else {
+		$#{$ctinfo{$ct}} -= (1+$ctinfoclear{$ct});
+	}
+	delete $ctinfoclear{$ct};
+
+	$page =~ s!/clearmsgs\??$!!;
+#	print $cfh "HTTP/1.0 205 OK\r\n";
+	print $cfh "HTTP/1.0 302 See Other\r\n";
+	printf $cfh "Location: %s\r\n", $page;
+	&finish_page($client, "");
+}
+
+
+sub send_page_alimits() {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my $tnum=0;
+	my ($ct,$dlrate,$ulrate,$dlimit,$ulimit,$unknown);
+	my ($nhave,$ntotal,$navail,$dl,$ul);
+	my ($v,$e,$E,$M,$m,$n,$Z,$Pz,$Qz,$C,$X,$o1,$o2,$o3,$o4,$o5);
+	my $foo;
+
+	print $cfh <<EOF =~ /[^\t]*\n/g;
+		HTTP/1.0 200 OK\r
+		Content-Type: text/html\r
+		\r
+		<HTML><HEAD><TITLE>CTCS - Advanced Limits</TITLE></HEAD><BODY>
+
+		<A HREF="/">Return to All Torrents</A>
+
+		<H1><CENTER>Advanced Limits</CENTER></H1>
+
+		<FORM METHOD=POST ACTION=/alimits>
+		<CENTER>
+		<TABLE BORDER>
+		<TR bgcolor="#cccccc"><TD rowspan=2>Torrent
+		   <TD colspan=2 align=center>Current Rate
+		   <TD colspan=2 align=center>Current Limit
+		   <TD colspan=2 align=center>Minimum
+		   <TD colspan=3 align=center>Maximum
+		   <TD colspan=2 align=center>Shared
+		</TR>
+		<TR bgcolor="#cccccc">
+		   <TD align=center>DL<TD align=center>UL
+		   <TD align=center>DL<TD align=center>UL
+		   <TD align=center>DL<TD align=center>UL
+		   <TD align=center>DL<TD align=center>UL<TD align=center>SR
+		   <TD align=center>DL<TD align=center>UL
+		</TR>
+EOF
+
+	foreach $ct (keys %torrents) {
+		++$tnum;
+
+		if (!defined($ctstatus{$ct})) { $nhave = $ntotal = $dl = $ul = 0; }
+		else { $ctstatus{$ct} =~
+			m!^[\d:/]+ +(\d+)/(\d+)/(\d+) +(\d+),(\d+) +(\d+),(\d+) +(\d+),(\d+)!;
+			($nhave,$ntotal,$navail,$dlrate,$ulrate,$dl,$ul,$dlimit,$ulimit) = 
+			($1,    $2,     $3,     $4,     $5,     $6, $7, $8,     $9);
+		}
+		if (defined($ctbw{$ct}) && $ctbw{$ct} =~ m!(\d+),(\d+) +(\d+),(\d+)!) {
+			($dlrate,$ulrate,$dlimit,$ulimit) = ($1,$2,$3,$4);
+			$unknown = 0;
+		} else {
+			($dlrate,$ulrate,$dlimit,$ulimit) = (0,0,0,0);
+			$unknown = 1;
+		}
+		if( $protocol{$ct} >= 3 && defined($ctconfig{$ct}) ){
+			($v,$e,$E,$M,$m,$n,$C,$Pz,$X,$o1,$o2,$o3,$o4,$o5)=&config_values($ct);
+			$Qz = 0;
+		} elsif (defined($ctconfig{$ct}) && $protocol{$ct} == 1 &&
+				$ctconfig{$ct} =~
+				m!([01]) (\d+) ([.\d]+) (\d+) (\d+) (\d+) ([01]) ([01]) ([01])!) {
+			($v,$e,$E,$M,$m,$n,$Z,$Pz,$Qz) = ($1,$2,$3,$4,$5,$6,$7,$8,$9);
+		} elsif (defined($ctconfig{$ct}) && $ctconfig{$ct} =~
+				m!([01]) (\d+) ([.\d]+) (\d+) (\d+) (\d+) (\d+) ([01])!) {
+			($v,$e,$E,$M,$m,$n,$C,$Pz) = ($1,$2,$3,$4,$5,$6,$7,$8);
+		} else {
+			$v=$e=$E=$M=$m=$n=$Z=$Pz=$Qz = "";
+			&request_config($ct);
+		}
+		printf $cfh "<TR><TD>%s\n", &html_safe($ctfile{$ct});
+		printf $cfh "   <input type=hidden name=\"t%did\" value=\"%s\">\n" .
+			"   <TD%s align=right>%.0f\n" .
+			"   <TD%s align=right>%.0f\n",
+			$tnum, &url_encode_data($torrents{$ct}),
+			$unknown ? " bgcolor=\"#ff6666\"" : "", $dlrate/1024,
+			$unknown ? " bgcolor=\"#ff6666\"" : "", $ulrate/1024;
+		printf $cfh "   <TD%s align=right>" .
+			"<input type=text size=4 align=right name=\"t%ddlimit\" value=%.0f%s>".
+			"<input type=hidden name=\"t%dxdlimit\" value=%.0f>\n",
+			$unknown ? " bgcolor=\"#ff6666\"" : "",
+			$tnum, $dlimit/1024, ($nhave >= $ntotal) ? " disabled" : "",
+			$tnum, $dlimit/1024;
+		printf $cfh "   <TD%s align=right>" .
+			"<input type=text size=4 align=right name=\"t%dulimit\" value=%.0f>" .
+			"<input type=hidden name=\"t%dxulimit\" value=%.0f>\n",
+			$unknown ? " bgcolor=\"#ff6666\"" : "",
+			$tnum, $ulimit/1024, $tnum, $ulimit/1024;
+		printf $cfh "   <TD%s align=right>" .
+			"<input type=text size=4 align=right name=\"t%dmindl\" value=%.0f%s>".
+			"\n",
+			$mindl{$ct} ? " bgcolor=\"#ffff66\"" : "", $tnum, $mindl{$ct}/1024,
+			($nhave >= $ntotal) ? " disabled" : "";
+		printf $cfh "   <TD%s align=right>" .
+			"<input type=text size=4 align=right name=\"t%dminul\" value=%.0f>\n",
+			$minul{$ct} ? " bgcolor=\"#ffff66\"" : "", $tnum, $minul{$ct}/1024;
+		printf $cfh "   <TD%s align=right>" .
+			"<input type=text size=4 align=right name=\"t%dmaxdl\" value=%.0f%s>".
+			"\n",
+			$maxdl{$ct} ? " bgcolor=\"#ffff66\"" : "", $tnum, $maxdl{$ct}/1024,
+			($nhave >= $ntotal) ? " disabled" : "";
+		my $max = $maxratio{$ct} ? $realmax{$ct} : $maxul{$ct};
+		printf $cfh "   <TD%s align=right>" .
+			"<input type=text size=4 align=right name=\"t%dmaxul\" value=%.0f>\n",
+			$max ? " bgcolor=\"#ffff66\"" : "", $tnum, $max/1024;
+		printf $cfh "   <TD%s align=left>" .
+			"<input type=checkbox name=\"t%dmaxratio\" value=1%s>%s\n",
+			($ntotal == 0 || ($E eq "" && $nhave < $ntotal)) ?
+				" bgcolor=\"#ff6666\"" :
+				$maxratio{$ct} ? " bgcolor=\"#ffff66\"" : "",
+			$tnum, ($nhave >= $ntotal) ? " disabled" :
+							$maxratio{$ct} ? " checked" : "",
+			($E eq "" || $nhave >= $ntotal) ? "" : sprintf("%.2f", $E)+0;
+		printf $cfh "   <TD%s align=center>" .
+			"<input type=checkbox name=\"t%dsharedl\" value=1%s>\n",
+			($sharedl{$ct} || $nhave >= $ntotal) ? "" : " bgcolor=\"#66ff66\"",
+			$tnum, ($nhave >= $ntotal) ? " disabled" :
+							$sharedl{$ct} ? " checked" : "";;
+		printf $cfh "   <TD%s align=center>" .
+			"<input type=checkbox name=\"t%dshareul\" value=1%s>\n",
+			$shareul{$ct} ? "" : " bgcolor=\"#66ff66\"",
+			$tnum, $shareul{$ct} ? " checked" : "";;
+		print $cfh "</TR>\n";
+	}
+	print $cfh "</TABLE>\n" .
+		"<BR><input type=submit value=\"Submit\">\n" .
+		"</CENTER></FORM>\n";
+	print $cfh <<EOF;
+<P><B>Notes</B><BR>
+<UL>
+<LI>All values are in kilobytes per second (KB/s).
+<LI>Options related to downloading are disabled for torrents that are seeding.
+<LI>Use caution when changing current limits to below the current rate--small
+  increments are recommended.
+<LI>"Minimum" and "Maximum" are soft limits.  They will be enforced when there
+  is competition for bandwidth; otherwise the torrent is free to give or take
+  unused bandwidth.
+	<UL>
+	<LI>Minimum:  If the torrent wants bandwidth up to this level, it will
+     receive it at the expense of other torrents.  It will not be forced or
+     held below this level if it wants (is using) the bandwidth.  Use to
+     high-prioritize a torrent, or to guarantee a bandwidth allocation amount
+     to a torrent.
+	<LI>Maximum:  The torrent will be forced down to this level if other
+     torrents want bandwidth.  Use to low-prioritize a torrent, or to limit the
+     amount of bandwidth this torrent is allowed to consume at the expense of
+     other torrents.
+	<LI>SR:  The maximum upload limit will be adjusted based on the torrent's
+     seed ratio ("-E" option, shown), current share ratio, and current
+     download rate.  It will not be increased above the Maximum or decreased
+     below the Minimum, if specified.  This option does not apply when seeding,
+     and has no effect if the seed ratio is unset (zero).  Use to avoid giving
+     away too much upload bandwidth when you have other torrents running that
+     could use it more fairly.
+	</UL>
+<LI>"Shared" indicates whether the torrent's bandwidth is counted against the
+  shared pool represented by the global limit on the main CTCS page.  CTCS will
+  dynamically manage the client's bandwidth only if the Shared option is
+  checked.
+<LI>Use a value of 0 to disable/remove a limit.
+<LI>Non-default settings are highlighted in yellow and green.  The limit field
+  in torrent status displays will also be highlighted as a reminder.  Red
+  highlight indicates an unknown value; you should refresh before making
+  changes.
+<LI>After submitting changes, you may need to refresh the page after a second
+  or two in order to see the resulting updates.
+</UL>
+</BODY></HTML>
+EOF
+
+	&finish_page($client, "");
+}
+
+
+sub finish_page() {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	if (!defined($page)) { }
+	elsif ($page eq "/" || $page eq "/peers") {
+		print $cfh "</TABLE>\n\n";
+		if (keys %dead) {
+			print $cfh "<BR><CENTER><HR width=50%>" .
+				"<H2>Terminated Torrents</H2></CENTER>\n";
+			&send_dead($client, $page);
+		}
+		print $cfh "<P><CENTER>CTCS Version $ver</CENTER>\n";
+		print $cfh "</BODY></HTML>\n";
+	} elsif ($page =~ m!^/torrent/[^?]+$!) {
+		print $cfh "</TABLE></BODY></HTML>\n";
+	} elsif ($page eq "404") {
+		print $cfh <<EOF =~ /[^\t]*\n/g;
+			HTTP/1.0 404 Not Found\r
+			Content-Type: text/html\r
+			\r
+			<HTML><HEAD><TITLE>404 Not Found</TITLE></HEAD><BODY>
+			<H1>Not Found</H1>
+			The requested page was not found.  Something may have changed since
+			the page you were viewing was generated.
+			Please return to the <A HREF="/">All Torrents</A> page to view the
+			current status.
+			</BODY></HTML>
+EOF
+	}
+	shutdown $cfh{$client}, 1;
+# Linux will close the socket immediately, discarding queued data.
+# Let the main select loop close it when read=true.
+#	close $cfh{$client};
+#	delete $cfh{$client};
+	delete $ctsentone{$client};
+	delete $htclients{$client};
+}
+
+
+sub change_root {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+
+	if ($page =~ /[?&]dlimit=(\d+)/) { $tdlimit = $1 * 1024; }
+	if ($page =~ /[?&]ulimit=(\d+)/) { $tulimit = $1 * 1024; }
+	if ($page =~ /[?&]bwinterval=(\d+)/) { $bwinterval = $1; }
+
+	$page =~ s/\?.*//;
+#	print $cfh "HTTP/1.0 205 OK\r\n";
+	print $cfh "HTTP/1.0 302 See Other\r\n";
+	printf $cfh "Location: /\r\n";
+	&finish_page($client, "");
+}
+
+
+sub change_torrent_post {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my ($id,$ct,$foo,$delay,$data,$len);
+	my $dbuf = "";
+	my ($v,$e,$E,$M,$m,$n,$Z,$ez,$Ep,$Pz,$Qz,$C);
+	my ($torrentsize,$piecelen,$timenow,$timeseed);
+	my %checked;
+
+	$page =~ m!^/torrent/(.*)!;
+	$id = &url_decode_data($1);
+	$ct = "";
+	foreach $foo (keys %torrents) {
+		$ct = $foo if ($id eq $torrents{$foo});
+	}
+	if (!$ct) { &finish_page($client, "404"); return; }
+
+	# POST request
+	$delay=0;
+	do {
+		if (defined($data = &getline($client))) {
+			if ($data =~ /Content-length:\s+(\d+)/i) {
+				$len = $1;
+			}
+			elsif ($data !~ /:\s/) {
+				$dbuf .= $data;
+			}
+		} else {
+			++$delay;
+			sleep 1;
+		}
+	} until ( (defined($len) && length($dbuf) >= $len) ||
+				(!defined($len) && $dbuf =~ /ctconfig=/) || $delay==$bwinterval );
+
+	if ($dbuf =~ /ctconfig=/) {
+		while ($dbuf =~ /([^&=]+)=([^&]+)/ig) {
+			my ($name,$value) = ($1, &url_decode_data(&url_decode_data($2)));
+			next if ($name eq "ctconfig");
+			my $type = $ctconfig{$ct}{$name}{"type"};
+			my $range = $ctconfig{$ct}{$name}{"range"};
+			next if ($type eq "S" && $range > 0 && length($value) > $range);
+			if ($type eq "I" || $type eq "F") {
+				next if ($type eq "I" && $value !~ /^\d+$/);
+				next if ($type eq "F" && $value !~ /^[.\d]+$/);
+				if ($range =~ /(\d+)-(\d+)/) {
+					next if ($value < $1 || $value > $2);
+				}
+			}
+			if ($type eq "B") {
+				$value = 1;
+				$checked{$name} = 1;
+			}
+			next if ($value eq $ctconfig{$ct}{$name}{"value"});
+			&set_config($ct, $name, $value);
+		}
+	}
+
+	foreach my $name (keys %{$ctconfig{$ct}}) {
+		if ($ctconfig{$ct}{$name}{"type"} eq "B" &&
+			 $ctconfig{$ct}{$name}{"value"} > 0 &&
+			 !$checked{$name}) {
+			&set_config($ct, $name, 0);
+		}
+	}
+
+#	print $cfh "HTTP/1.0 205 OK\r\n";
+	print $cfh "HTTP/1.0 302 See Other\r\n";
+	printf $cfh "Location: %s\r\n", $page;
+	&finish_page($client, "");
+}
+
+
+sub change_torrent_get {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my ($id,$ct,$foo);
+	my ($v,$e,$E,$M,$m,$n,$Z,$ez,$Ep,$Pz,$Qz,$C);
+	my ($torrentsize,$piecelen,$timenow,$timeseed);
+
+	$page =~ m!^/torrent/([^?]+)!;
+	$id = &url_decode_data($1);
+	$ct = "";
+	foreach $foo (keys %torrents) {
+		$ct = $foo if ($id eq $torrents{$foo});
+	}
+	if (!$ct) { &finish_page($client, "404"); return; }
+
+	if ($protocol{$ct} == 1 && $ctconfig{$ct} =~
+			m!([01]) (\d+) ([.\d]+) (\d+) (\d+) (\d+) ([01]) ([01]) ([01])!) {
+		($v,$e,$E,$M,$m,$n,$Z,$Pz,$Qz) = ($1,$2,$3,$4,$5,$6,$7,$8,$9);
+	}elsif ($ctconfig{$ct} =~
+			m!([01]) (\d+) ([.\d]+) (\d+) (\d+) (\d+) (\d+) ([01])!) {
+		($v,$e,$E,$M,$m,$n,$C,$Pz) = ($1,$2,$3,$4,$5,$6,$7,$8);
+	}
+	if ($ctdetail{$ct} =~ m!(\d+) +(\d+) +(\d+) +(\d+)!) {
+		($torrentsize,$piecelen,$timenow,$timeseed) = ($1,$2,$3,$4);
+	} else { ($torrentsize,$piecelen,$timenow,$timeseed) = (0,0,0,0); }
+
+	$v = ($page=~/[?&]v=(\d+)/) ? "1" : "0";
+	$ez = 0;
+	if ($page=~/[?&]e=(\d+)/ && $1>=0) {
+		if (!$1) { $ez = 1; }
+		else {
+			$foo = $1 + ($timeseed ?
+								sprintf("%.0f", ($timenow-$timeseed)/3600) : 0);
+			$e = ($foo == $e) ? "." : $foo;
+		}
+	} else { $e = "."; }
+	$Ep = ($page=~/[?&]E=(\d+[.\d]*)/) ? ( ($1==$E)?".":$1 ) : ".";
+	$M = ($page=~/[?&]M=(\d+)/) ? ( ($1==$M)?".":$1 ) : ".";
+	$m = ($page=~/[?&]m=(\d+)/) ? ( ($1==$m)?".":$1 ) : ".";
+	$n = ($page=~/[?&]n=(\d+)/) ? ( ($1==$n)?".":$1 ) : ".";
+	$C = ($page=~/[?&]C=(\d+)/) ? ( ($1==$C)?".":$1 ) : ".";
+	$Z = ($page=~/[?&]exitzero=(\d+)/) ? "1" : "0";
+	$Pz = ($page=~/[?&]pause=(\d+)/) ? "1" : "0";
+
+	$Qz = $Z * $Pz;
+	if ($Qz) { $Z = $Pz = 0; }
+
+	# Allow e=0 if E>0
+	$E = $Ep if ($Ep ne ".");
+	$e = 0 if ($ez && $E);
+	$E = $Ep;
+
+	if ($E =~ /^\.\d/) { $E = "0$E"; }
+	&set_config($ct, $v, $e, $E, $M, $m, $n, $Z, $Pz, $Qz, $C);
+
+	$page =~ s/\?.*//;
+#	print $cfh "HTTP/1.0 205 OK\r\n";
+	print $cfh "HTTP/1.0 302 See Other\r\n";
+	printf $cfh "Location: %s\r\n", $page;
+	&finish_page($client, "");
+}
+
+
+sub change_tracker {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my ($id,$ct,$foo);
+	my ($v,$e,$E,$M,$n,$Z,$ez,$Ep,$Pz,$Qz);
+	my ($torrentsize,$piecelen,$timenow,$timeseed);
+
+	$page =~ m!^/tracker/([^?]+)!;
+	$id = &url_decode_data($1);
+	$ct = "";
+	foreach $foo (keys %torrents) {
+		$ct = $foo if ($id eq $torrents{$foo});
+	}
+	if (!$ct) { &finish_page($client, "404"); return; }
+
+	if ($page =~ /[?&]tracker=quit/) {
+		&quit_torrent($client, $page);
+		return;
+	} elsif ($page =~ /[?&]tracker=restart/) {
+		local *FH = $cfh{$ct};
+		printf FH "CTRESTART\r\n";
+	} else {	# update is default
+		local *FH = $cfh{$ct};
+		printf FH "CTUPDATE\r\n";
+	}
+
+	$page =~ s/\?.*//;
+	$page =~ s!/tracker/!/torrent/!;
+#	print $cfh "HTTP/1.0 205 OK\r\n";
+	print $cfh "HTTP/1.0 302 See Other\r\n";
+	printf $cfh "Location: %s\r\n", $page;
+	&finish_page($client, "");
+}
+
+
+sub quit_torrent() {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my ($id,$ct,$foo);
+
+	$page =~ m!^/tracker/([^?]+)!;
+	$id = &url_decode_data($1);
+	$ct = "";
+	foreach $foo (keys %torrents) {
+		$ct = $foo if ($id eq $torrents{$foo});
+	}
+	if ($ct) {
+		local *FH = $cfh{$ct};
+		printf FH "CTQUIT\r\n";
+
+		print $cfh "HTTP/1.0 302 See Other/\r\n";
+		print $cfh "Location: /\r\n";
+	}
+	&finish_page($client, "");
+}
+
+
+sub change_files() {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my ($id,$ct,$foo,$delay,$data,$len);
+	my $dbuf = "";
+	my (%pri,$value);
+
+	$page =~ m!^/files/(.*)!;
+	$id = &url_decode_data($1);
+	$ct = "";
+	foreach $foo (keys %torrents) {
+		$ct = $foo if ($id eq $torrents{$foo});
+	}
+	if (!$ct) { &finish_page($client, "404"); return; }
+
+	# POST request
+	$delay=0;
+	do {
+		if (defined($data = &getline($client))) {
+			if ($data =~ /Content-length:\s+(\d+)/i) {
+				$len = $1;
+			}
+			elsif ($data !~ /:\s/) {
+				$dbuf .= $data;
+			}
+		} else {
+			++$delay;
+			sleep 1;
+		}
+	} until ( (defined($len) && length($dbuf) >= $len) ||
+				(!defined($len) && $dbuf =~ /f\d+pri=/) || $delay==$bwinterval );
+
+	if ($dbuf =~ /f\d+pri=/) {
+		while ($dbuf =~ /f(\d+)pri=(\d+)/ig) {
+			my ($fnum,$fpri) = ($1, &url_decode_data(&url_decode_data($2)));
+			if ($fpri) {
+				$pri{$fpri} .= "${fnum}+";
+			}
+		}
+	}
+
+	$value = "";
+	foreach my $fpri (sort {$::a <=> $::b} keys %pri) {
+		$pri{$fpri} =~ s/\+$//;
+		$value .= $pri{$fpri} . ",";
+	}
+	$value =~ s/,$//;
+	if ($value) {
+		&set_config($ct, "file_list", $value);
+	}
+
+	$page =~ s!/files/!/torrent/!;
+#	print $cfh "HTTP/1.0 205 OK\r\n";
+	print $cfh "HTTP/1.0 302 See Other\r\n";
+	printf $cfh "Location: %s\r\n", $page;
+	&finish_page($client, "");
+}
+
+
+sub change_alimits() {
+	my ($client,$page) = @_;
+	my $cfh = $cfh{$client};
+	my $ct;
+	my ($delay,$data,$foo,$tnum,$tid,$len);
+	my $dbuf = "";
+
+	# POST request
+	$delay=0;
+	do {
+		if (defined($data = &getline($client))) {
+			if ($data =~ /Content-length:\s+(\d+)/i) {
+				$len = $1;
+			}
+			elsif ($data !~ /:\s/) {
+				$dbuf .= $data;
+			}
+		} else {
+			++$delay;
+			sleep 1;
+		}
+	} until ( (defined($len) && length($dbuf) >= $len) ||
+				(!defined($len) && $dbuf =~ /t1id=/) || $delay==$bwinterval );
+
+	while ($dbuf =~ /t(\d+)id=([^&]+)/ig) {
+		($tnum,$tid) = ($1, &url_decode_data(&url_decode_data($2)));
+		$ct = "";
+		foreach $foo (keys %torrents) {
+			$ct = $foo if ($tid eq $torrents{$foo});
+		}
+		next if (!$ct);
+
+		if ($dbuf =~ /t${tnum}dlimit=(\d+)/i) {
+			my $newdl = $1;
+			if ($dbuf =~ /t${tnum}xdlimit=(\d+)/i) {
+				my $olddl = $1;
+				if ($newdl != $olddl) {
+					&set_dl_limit($ct, $newdl*1024);
+				}
+			}
+		}
+		if ($dbuf =~ /t${tnum}ulimit=(\d+)/i) {
+			my $newul = $1;
+			if ($dbuf =~ /t${tnum}xulimit=(\d+)/i) {
+				my $oldul = $1;
+				if ($newul != $oldul) {
+					&set_ul_limit($ct, $newul*1024);
+				}
+			}
+		}
+		if ($dbuf =~ /t${tnum}mindl=(\d+)/i) { $mindl{$ct} = $1*1024; }
+		if ($dbuf =~ /t${tnum}minul=(\d+)/i) { $minul{$ct} = $1*1024; }
+		if ($dbuf =~ /t${tnum}maxdl=(\d+)/i) { $maxdl{$ct} = $1*1024; }
+		if ($dbuf =~ /t${tnum}maxul=(\d+)/i) {
+			my $max = $1 * 1024;
+			if ($dbuf =~ /t${tnum}maxratio=(\d+)/i) {
+				$realmax{$ct} = $max;
+			} else { $maxul{$ct} = $max; }
+		}
+		if ($dbuf =~ /t${tnum}sharedl=(\d+)/i) { $sharedl{$ct} = 1; }
+		else {
+			$sharedl{$ct} = 0;
+			if ($dbuf =~ /t${tnum}dlimit=(\d+)/i) {
+				&set_dl_limit($ct, $1*1024);
+			}
+		}
+		if ($dbuf =~ /t${tnum}shareul=(\d+)/i) { $shareul{$ct} = 1; }
+		else {
+			$shareul{$ct} = 0;
+			if ($dbuf =~ /t${tnum}ulimit=(\d+)/i) {
+				&set_ul_limit($ct, $1*1024);
+			}
+		}
+		if ($dbuf =~ /t${tnum}maxratio=(\d+)/i) {
+			$maxratio{$ct} = 1;
+			&request_config($ct);
+			&request_status($ct);
+		} else { $maxratio{$ct} = 0; }
+	}
+
+	print $cfh "HTTP/1.0 302 See Other\r\n";
+	printf $cfh "Location: %s\r\n", $page;
+	&finish_page($client, "");
+}
+
+
+sub manage_bw {
+	my ($dlrate,$ulrate,$dl,$ul,$dlimit,$ulimit,$adlrate,$aulrate);
+	my ($bumpfactor, $ntorrents, $avg_dl, $avg_ul, $ct);
+	my ($avail_dl, $avail_ul, $bumpdl_want, $bumpul_want) = (0,0,0,0);
+	my (%bumpdl_d, %bumpdl_u, %over_dl, %bumpul_d, %bumpul_u, %over_ul);
+	my (%toolow_dl, %toolow_ul);
+	my ($alldlimit, $allulimit);
+
+	&set_minmax();
+
+	$bumpfactor = .05;
+
+	# Compute average download limit target.
+	$ntorrents = 0;
+	foreach $ct (keys %torrents) { ++$ntorrents if ($sharedl{$ct}); }
+	if ($ntorrents) {
+		$avg_dl = int($tdlimit / $ntorrents);	# "raw" average
+		# now recompute the avg, taking into account high min & low max limits
+		$ntorrents = 0;
+		my $adl = $tdlimit;
+		foreach $ct (keys %torrents) {
+			if ($sharedl{$ct}) {
+				if ($maxdl{$ct} && $maxdl{$ct} < $avg_dl) { $adl -= $maxdl{$ct}; }
+				elsif ($mindl{$ct} < $avg_dl) { ++$ntorrents; }
+				else { $adl -= $mindl{$ct}; }
+			}
+		}
+		if ($ntorrents) { $avg_dl = int($adl / $ntorrents); }
+	} else { $avg_dl = $tdlimit; }	# no shared-bw torrents
+
+	# Compute average upload limit target.
+	$ntorrents = 0;
+	foreach $ct (keys %torrents) { ++$ntorrents if ($shareul{$ct}); }
+	if ($ntorrents) {
+		$avg_ul = int($tulimit / $ntorrents);	# "raw" average
+		# now recompute the avg, taking into account high min & low max limits
+		$ntorrents = 0;
+		my $aul = $tulimit;
+		foreach $ct (keys %torrents) {
+			if ($shareul{$ct}) {
+				if ($maxul{$ct} && $maxul{$ct} < $avg_ul) { $aul -= $maxul{$ct}; }
+				elsif ($minul{$ct} < $avg_ul) { ++$ntorrents; }
+				else { $aul -= $minul{$ct}; }
+			}
+		}
+		if ($ntorrents) { $avg_ul = int($aul / $ntorrents); }
+	} else { $avg_ul = $tulimit; }	# no shared-bw torrents
+
+	$ntorrents = scalar(keys %torrents);
+
+	$alldlimit = $allulimit = 0;
+	$avail_dl = $avail_ul = 0;
+	$bumpdl_want = $bumpul_want = 0;
+	foreach $ct (keys %torrents) {
+		if (defined $ctbw{$ct}) {
+			$ctbw{$ct} =~ m!(\d+),(\d+) +(\d+),(\d+)!;
+			($dlrate,$ulrate,$dlimit,$ulimit) = ($1,$2,$3,$4);
+			($adlrate,$aulrate) = ($dlrate,$ulrate);
+
+			# Compute rates over the last bwinterval
+			if (defined $pdlrate{$ct}) {
+				$dlrate = (20*$adlrate - (20-$bwinterval)*$pdlrate{$ct})
+								/ $bwinterval;
+			}
+			if (defined $pulrate{$ct}) {
+				$ulrate = (20*$aulrate - (20-$bwinterval)*$pulrate{$ct})
+								/ $bwinterval;
+			}
+
+			if ($tdlimit && $sharedl{$ct}) {
+				$alldlimit += $dlimit;
+				&check_rate($ct, $dlrate, $adlrate, $dlimit, $bumpfactor, $avg_dl,
+					$mindl{$ct}, $maxdl{$ct}, \%toolow_dl,
+					\$avail_dl, \$bumpdl_want, \%bumpdl_d, \%bumpdl_u, \%over_dl);
+			}
+			if ($tulimit && $shareul{$ct}) {
+				$allulimit += $ulimit;
+				&check_rate($ct, $ulrate, $aulrate, $ulimit, $bumpfactor, $avg_ul,
+					$minul{$ct}, $maxul{$ct}, \%toolow_ul,
+					\$avail_ul, \$bumpul_want, \%bumpul_d, \%bumpul_u, \%over_ul);
+			}
+
+			if (defined($toolow_dl{$ct}) && defined($sawseed{$ct})) {
+				delete $toolow_dl{$ct};
+			}
+
+			$pdlrate{$ct} = $adlrate;
+			$pulrate{$ct} = $aulrate;
+		}
+	}
+	$avail_dl += ($tdlimit - $alldlimit);
+	$avail_ul += ($tulimit - $allulimit);
+#	printf "Available DL:  %d\r\n", $avail_dl;
+	if (keys %bumpdl_u || $avail_dl < 0) {
+		&adjust_limits($dlimit, $bumpfactor,
+			$avail_dl, $bumpdl_want, \%bumpdl_d, \%bumpdl_u, \%over_dl,
+			\%mindl, \%maxdl, \&set_dl_limit, $alldlimit, $avg_dl, \%toolow_dl);
+	}
+#	printf "Available UL:  %d\r\n", $avail_ul;
+	if (keys %bumpul_u || $avail_ul < 0) {
+		&adjust_limits($ulimit, $bumpfactor,
+			$avail_ul, $bumpul_want, \%bumpul_d, \%bumpul_u, \%over_ul,
+			\%minul, \%maxul, \&set_ul_limit, $allulimit, $avg_ul, \%toolow_ul);
+	}
+}
+
+
+# Check a ct's rate and limit to gather information that determines whether
+# its limit can or should be increased or decreased.
+sub check_rate {
+	my ($ct, $rate, $arate, $limit, $bumpfactor, $avg, $min, $max, $ptoolow,
+		$pavail, $pbump_want, $pbump_d, $pbump_u, $pover) = @_;
+
+	if ($limit >= 1+$bumpfactor && $rate < $limit * (1-$bumpfactor) &&
+			$arate < $limit * (1-$bumpfactor) && $limit > $min && $limit > $avg) {
+		# ct's limit can be decreased.
+		$pbump_d->{$ct} = $limit;
+	} elsif ($rate > 0.98 * $limit || $arate > 0.98 * $limit) {
+		# ct wants more bandwidth.
+		$pbump_u->{$ct} = $limit;
+		${$pbump_want} += $limit;
+#		Debugging:
+#		$ctbw{$ct} =~ m!(\d+),(\d+) +(\d+),(\d+)!;
+#		my($dlrate,$ulrate,$dlimit,$ulimit) = ($1,$2,$3,$4);
+#		print(($rate == $dlrate) ? "DL" : "UL");
+#		printf "   %s wants (%d / %d)\r\n", $torrents{$ct}, $rate, $limit;
+	}
+	if ( ($limit > $avg && $limit > $min) || ($max && $limit > $max) ) {
+		# ct is using more than its rightful share.
+		$pover->{$ct} = $limit;	# candidate for decreasing its limit
+	}
+	elsif ( ($limit < $min || $limit < $avg) && (!$max || $limit < $max) ) {
+		$ptoolow->{$ct} = $limit;
+	}
+	# identify unused bandwidth that can be borrowed but not taken away
+	if ($arate < $min || $arate < $avg) {
+		if ($min > $avg) {
+			${$pavail} += (&min($limit, $min) - $arate);
+		} else {
+			${$pavail} += (&min($limit, $avg) - $arate);
+		}
+	}
+}
+
+
+sub adjust_limits {
+	my ($limit, $bumpfactor,
+		$avail, $bump_want, $pbump_d, $pbump_u, $pover,
+		$pmin, $pmax, $pset_limit, $all_limit, $avg, $ptoolow) = @_;
+	my ($ct, $bump, $maxct, $mybump_u);
+	my (@foo);
+
+	# Find spare bandwidth to fill demand:
+	if ($avail < $bump_want * $bumpfactor || $avail < 0) {
+#		printf "   avail/want: %d / %d\r\n", $avail, $bump_want * $bumpfactor;
+
+		# First, take unused bandwidth from torrents.
+		if (keys %$pbump_d) {
+			foreach $ct (keys %$pbump_d) {
+				# Take only what we need.
+				$bump = &min( &max(1, $pbump_d->{$ct} * $bumpfactor),
+					$bump_want * $bumpfactor - $avail );
+				# bump no lower than the ct's min limit
+				$bump = &min( $bump, $pbump_d->{$ct} - $pmin->{$ct} );
+				# ... or the average (basic entitlement)
+				$bump = &min( $bump, $pbump_d->{$ct} - $avg );
+				if ($bump) {
+#					printf "   bump1 %s: -%d", $torrents{$ct}, $bump;
+					&$pset_limit($ct, $pbump_d->{$ct} - $bump);
+					delete $pover->{$ct};	# take only once
+					$avail += $bump;
+				}
+			}
+		}
+
+		# Next, force down torrents that are above max.
+		if ($avail < $bump_want * $bumpfactor || $avail < 0) {
+#			printf "max: %d / %d\r\n", $avail, $bump_want * $bumpfactor;
+			@foo = keys(%$pover);
+			foreach $ct (@foo) {
+				if ($pmax->{$ct} && $pover->{$ct} > $pmax->{$ct}) {
+					$mybump_u = defined($pbump_u->{$ct}) ? $pbump_u->{$ct} : 0;
+#					printf "  cand: %d > %d & wants %d\r\n",
+#						$pover->{$ct}, $pmax->{$ct}, $mybump_u*$bumpfactor;
+					if ($avail < ($bump_want - $mybump_u) * $bumpfactor) {
+						# bump no lower than the ct's max limit
+						$bump = &min( &min( &max(1, $pover->{$ct} * $bumpfactor),
+										($bump_want - $mybump_u) * $bumpfactor - $avail ),
+									$pover->{$ct} - $pmax->{$ct} );
+#						printf "   bump2 %s: -%d", $torrents{$ct}, $bump;
+						&$pset_limit($ct, $pover->{$ct} - $bump);
+						$avail += $bump;
+						delete $pover->{$ct};	# don't take twice
+					}
+					# If there's not enough, those over max don't get any.
+					if (defined($pbump_u->{$ct})) {
+						$bump_want -= $pbump_u->{$ct};
+						delete $pbump_u->{$ct};	# give to the needy
+					}
+				}
+			}
+#			print "max done\r\n";
+		}
+
+		# Next, handle any remaining overcommitment issues.
+		# This loop takes from the highest-limit torrent (each only once)
+		# until the goal is met.
+		while (keys %$pover && $avail < 0) {
+			$maxct = "";
+			foreach $ct (keys %$pover) {
+				$maxct = $ct if (!$maxct || ($pover->{$ct} > $pover->{$maxct}));
+			}
+			# bump no lower than the ct's min limit
+			$bump = &min( &max(1, $pover->{$maxct} * $bumpfactor),
+				$pover->{$maxct} - $pmin->{$maxct} );
+			# ... or the average (basic entitlement)
+			$bump = &min( $bump, $pover->{$maxct} - $avg );
+#			printf "   bump3 %s: -%d", $torrents{$maxct}, $bump;
+			&$pset_limit($maxct, $pover->{$maxct} - $bump);
+			if (defined($pbump_u->{$maxct})) {
+				$bump_want -= $pbump_u->{$maxct};
+				delete $pbump_u->{$maxct};	# don't give back if we take away
+			}
+			$avail += $bump;
+			delete $pover->{$maxct};	# don't take twice
+		}
+
+		# Next, take once from the highest-limit torrent.
+		# (but don't consider his own demand in the decision to take)
+		if (keys %$pover && $avail < $bump_want * $bumpfactor) {
+			$maxct = "";
+			foreach $ct (keys %$pover) {
+				$maxct = $ct if (!$maxct || ($pover->{$ct} > $pover->{$maxct}));
+			}
+			$mybump_u = defined($pbump_u->{$maxct}) ? $pbump_u->{$maxct} : 0;
+			if ($avail < ($bump_want - $mybump_u) * $bumpfactor) {
+				# bump no lower than the ct's min limit
+				$bump = &min( &min( &max(1, $pover->{$maxct} * $bumpfactor),
+									($bump_want - $mybump_u) * $bumpfactor - $avail ),
+							$pover->{$maxct} - $pmin->{$maxct} );
+				# ... or the average (basic entitlement)
+				$bump = &min( $bump, $pover->{$maxct} - $avg );
+#				printf "   bump4 %s: -%d", $torrents{$maxct}, $bump;
+				&$pset_limit($maxct, $pover->{$maxct} - $bump);
+				$avail += $bump;
+			}
+			if (defined($pbump_u->{$maxct})) {
+				$bump_want -= $pbump_u->{$maxct};
+				delete $pbump_u->{$maxct};	# give to the needy
+			}
+		}
+	}
+
+	# If we have any spare bandwidth, pass it out.
+	if ($avail >= 1) {
+#		printf "   avail: %d\r\n", $avail;
+		if ($avail < $bump_want * $bumpfactor) {
+			$bumpfactor = $avail / $bump_want;
+		} else {
+			# increase the increment if we have a lot available
+			$bumpfactor = &max($bumpfactor, $avail/2 /
+										($all_limit ? $all_limit : 1));
+		}
+		foreach $ct (keys %$pbump_u) {
+			$bump = &max( 1, &min($avail, $pbump_u->{$ct} * $bumpfactor) );
+#			printf "   bump5 %s: +%d", $torrents{$ct}, $bump;
+			&$pset_limit( $ct,
+				&max(&max($pbump_u->{$ct} + $bump, $pmin->{$ct}), $avg) );
+			$avail -= $bump;
+			last if ($avail < 1);
+		}
+	}
+
+	# Bring up limits that are too low
+	foreach $ct (keys %$ptoolow) {
+		my $newlimit = &max($pmin->{$ct}, $avg);
+		if(defined($pmax->{$ct}) && $pmax->{$ct}){
+			$newlimit = &min($newlimit, $pmax->{$ct});
+		}
+#		printf "   set6 %s: %d", $torrents{$ct}, $newlimit;
+		&$pset_limit($ct, $newlimit);
+	}
+}
+
+
+# Perform any auto-adjustment of minimum and maximum limits.
+sub set_minmax {
+	my $ct;
+	my ($v,$e,$E,$M,$m,$n,$Z,$Pz,$Qz,$C,$X,$o1,$o2,$o3,$o4,$o5);
+	my ($nhave,$ntotal,$navail,$dlrate,$ulrate,$dl,$ul,$dlimit,$ulimit);
+
+	foreach $ct (keys %torrents) {
+		next unless $maxratio{$ct} &&
+				defined($ctconfig{$ct}) && defined($ctstatus{$ct});
+		&request_status($ct);
+		if( $protocol{$ct} >= 3 && defined($ctconfig{$ct}) ){
+			($v,$e,$E,$M,$m,$n,$C,$Pz,$X,$o1,$o2,$o3,$o4,$o5)=&config_values($ct);
+			$Qz = 0;
+		}elsif ($protocol{$ct} == 1 && $ctconfig{$ct} =~
+				m!([01]) (\d+) ([.\d]+) (\d+) (\d+) (\d+) ([01]) ([01]) ([01])!) {
+			($v,$e,$E,$M,$m,$n,$Z,$Pz,$Qz) = ($1,$2,$3,$4,$5,$6,$7,$8,$9);
+		} elsif ($ctconfig{$ct} =~
+				m!([01]) (\d+) ([.\d]+) (\d+) (\d+) (\d+) (\d+) ([01])!) {
+			($v,$e,$E,$M,$m,$n,$C,$Pz) = ($1,$2,$3,$4,$5,$6,$7,$8);
+		} else { next; }
+		$ctstatus{$ct} =~
+			m!^[\d:/]+ +(\d+)/(\d+)/(\d+) +(\d+),(\d+) +(\d+),(\d+) +(\d+),(\d+)!;
+		($nhave,$ntotal,$navail,$dlrate,$ulrate,$dl,$ul,$dlimit,$ulimit) =
+		($1,    $2,     $3,     $4,     $5,     $6, $7, $8,     $9);
+
+		if ($nhave >= $ntotal) {	# seeding--turn off option
+			$maxratio{$ct} = 0;
+			$maxul{$ct} = $realmax{$ct};
+			next;
+		}
+		if (!$E || $ul/($dl ? $dl : 0) < $E) {	# below target ratio--upload away
+			$maxul{$ct} = $realmax{$ct};
+			next;
+		} else {	# at/above ratio--regulate max limit
+			if ($dlrate == 0 && $minul{$ct} == 0) {
+				# need to give a little to avoid a stalemate
+				my $avg_ul = $tulimit / scalar(keys %torrents);
+				$maxul{$ct} = &min(1024, $avg_ul / 2);
+			} else {
+				$maxul{$ct} = &max($E * $dlrate, $minul{$ct});
+			}
+			if ($realmax{$ct}) {
+				$maxul{$ct} = &min($maxul{$ct}, $realmax{$ct});
+			}
+		}
+	}
+	return;
+}
+
+
+sub config_values {
+	my ($ct) = @_;
+	my ($v,$e,$E,$M,$m,$n,$C,$Pz,$X,$o1,$o2,$o3,$o4,$o5) = (
+		$ctconfig{$ct}{"verbose"}{"value"},
+		$ctconfig{$ct}{"seed_time"}{"value"},
+		$ctconfig{$ct}{"seed_ratio"}{"value"},
+		$ctconfig{$ct}{"max_peers"}{"value"},
+		$ctconfig{$ct}{"min_peers"}{"value"},
+		$ctconfig{$ct}{"file_list"}{"value"},
+		$ctconfig{$ct}{"cache"}{"value"},
+		$ctconfig{$ct}{"pause"}{"value"},
+		$ctconfig{$ct}{"user_exit"}{"value"},
+		$ctconfig{$ct}{"out_normal"}{"value"},
+		$ctconfig{$ct}{"out_interact"}{"value"},
+		$ctconfig{$ct}{"out_error"}{"value"},
+		$ctconfig{$ct}{"out_debug"}{"value"},
+		$ctconfig{$ct}{"input"}{"value"} );
+
+	return ($v,$e,$E,$M,$m,$n,$C,$Pz,$X,$o1,$o2,$o3,$o4,$o5);
+}
+
+
+sub set_dl_limit {
+	my ($ct, $limit) = @_;
+	local *FH = $cfh{$ct};
+#	printf " [%.0f]\r\n", $limit;
+	printf FH "SETDLIMIT %.0f\r\n", $limit;
+}
+
+sub set_ul_limit {
+	my ($ct, $limit) = @_;
+	local *FH = $cfh{$ct};
+#	printf " [%.0f]\r\n", $limit;
+	printf FH "SETULIMIT %.0f\r\n", $limit;
+}
+
+sub set_config {
+	my ($ct, $foo) = @_;
+	if ($protocol{$ct} >= 3) {
+		my ($ct, $name, $value) = @_;
+		local *FH = $cfh{$ct};
+		printf FH "CTCONFIG %s %s\r\n", $name, $value;
+	} else {
+		my ($ct, $v,$e,$E,$M,$m,$n,$Z,$Pz,$Qz,$C) = @_;
+		local *FH = $cfh{$ct};
+		if ($protocol{$ct} == 2) {
+			print FH "CTCONFIG $v $e $E $M $m $n $C $Pz\r\n";
+		} else {
+			print FH "CTCONFIG $v $e $E $M $m $n $Z $Pz $Qz\r\n";
+		}
+	}
+}
+
+sub send_protocol {
+	my ($ct) = @_;
+	local *FH = $cfh{$ct};
+	print FH "PROTOCOL $CTCS_PROTOCOL\r\n";
+}
+
+sub send_error {
+	my ($ct, $message) = @_;
+	local *FH = $cfh{$ct};
+	print FH "ERROR $message\r\n";
+}
+
+sub request_detail {
+	my ($ct) = @_;
+	local *FH = $cfh{$ct};
+	print FH "SENDDETAIL\r\n";
+}
+
+sub request_config {
+	my ($ct) = @_;
+	local *FH = $cfh{$ct};
+	print FH "SENDCONF\r\n";
+}
+
+sub request_peers {
+	my ($ct) = @_;
+	local *FH = $cfh{$ct};
+	print FH "SENDPEERS\r\n";
+}
+
+sub request_status {
+	my ($ct) = @_;
+	local *FH = $cfh{$ct};
+	print FH "SENDSTATUS\r\n";
+}
+
+
+sub html_safe {
+	my ($str) = @_;
+	$str =~ s/\&/\&amp\;/g;
+	$str =~ s/\</\&lt\;/g;
+	$str =~ s/\>/\&gt\;/g;
+	$str =~ s/\"/\&quot\;/g;
+	return $str;
+}
+
+sub url_encode_data {
+	my ($str) = @_;
+	$str =~ s/([^\w\-_.])/sprintf("%%%02X",ord($1))/eg;
+	return $str;
+}
+
+sub url_decode_data {
+	my ($str) = @_;
+	$str =~ s/%([\da-f]{2})/chr(hex($1))/eig;
+	return $str;
+}
+
+
+sub min {
+	my ($a, $b) = @_;
+	return ($a < $b) ? $a : $b;
+}
+
+sub max {
+	my ($a, $b) = @_;
+	return ($a > $b) ? $a : $b;
+}
+
+sub unit {
+	my ($value) = @_;
+	my $unit=($value>9999*1024) ? "M" : (($value>9999) ? "K" : "B");
+	return $unit;
+}
+
+sub value {
+	my ($value,$unit) = @_;
+	if ($unit eq "K"){ $value /= 1024; }
+	elsif ($unit eq "M"){ $value /= (1024*1024); }
+	return $value;
+}
+
+sub clienttype {
+	my ($peerid, $myid) = @_;
+	my ($ctclient,$ctversion);
+
+	if ($peerid eq $myid) {
+		$ctclient = "BitComet?";
+		$ctversion = "(clone)";
+	}
+	elsif ($peerid =~ /(UDP0|55445030|HTTPBT|485454504254)$/) {
+		$ctclient = "BitSpirit";
+		if ($peerid =~ /^0x00(..)4253/) {  # 4253 = BS
+			$ctversion = hex($1);
+		} else { $ctversion = "(spoof)"; }
+	}
+	elsif ($peerid =~ /^-([A-Z][A-Z~])(\d[\w.]{3,4})-/i) {
+		$ctclient = $ctclients1{$1};
+		$ctclient = "Unknown" if (!$ctclient);
+		$ctversion = $2;
+	}
+	elsif ($peerid =~ /^-FG(\d[\w.]{3})/i) {
+		$ctclient = "FlashGet";
+		$ctversion = $1;
+	}
+	elsif ($peerid =~ /^([a-z])([\dA-M]{3})--/i) {
+		$ctclient = $ctclients2{$1};
+		$ctversion = $2;
+	}
+	elsif ($peerid =~ /^([a-z])0x([\dA-M]{6})00/i) {
+		$ctclient = $ctclients2{$1};
+		$ctversion = $2;
+	}
+	elsif ($peerid =~ /^M(\d-\d+-\d+)-/) {
+		$ctclient = "BitTorrent";
+		$ctversion = $1;
+	}
+	elsif ($peerid =~ /^Q(\d-\d+-\d+)-/) {
+		$ctclient = "Queen Bee";
+		$ctversion = $1;
+	}
+	elsif ($peerid =~ /^exbc0x(..)(..)4C4F5244/) {
+		$ctclient = "BitLord";
+		$ctversion = hex($1) . "." . hex($2);
+	}
+	elsif ($peerid =~ /^exbc0x00(..)/) {
+		$ctclient = "BitComet";
+		$ctversion = "0." . hex($1);
+	}
+	elsif ($peerid =~ /^[xF]UTB0x00(..)/) {
+		$ctclient = "FUTB BitComet";
+		$ctversion = "0." . hex($1);
+	}
+	elsif ($peerid =~ /^XBT(\d{3})[d-]-/) {
+		$ctclient = "XBT";
+		$ctversion = $1;
+	}
+	elsif ($peerid =~ /^OP(\d{4})/) {
+		$ctclient = "Opera";
+		$ctversion = $1;
+	}
+	elsif ($peerid =~ /^-G3/) {
+		$ctclient = "G3 Torrent";
+		$ctversion = "";
+	}
+	elsif ($peerid =~ /^Mbrst(\d-\d-\d)/) {
+		$ctclient = "Burst!";
+		$ctversion = $1;
+	}
+	elsif ($peerid =~ /^Plus(\d\d[^-]*)-/) {
+		$ctclient = "BitTorrentPlus";
+		$ctversion = $1;
+	}
+	elsif ($peerid =~ /^-BOW([A-Z])0([A-Z])-/) {
+		$ctclient = "BitsOnWheels";
+		if ($1 eq "P") {
+			$ctversion = "Pre";
+		} else {
+			$ctversion = ord($1)-ord("A")+1;
+		}
+		$ctversion .= ".0" . (ord($2)-ord("A")+1);
+	}
+	elsif ($peerid =~ /^BTM(\d+)BTuga/i) {
+		$ctclient = "BTuga";
+		$ctversion = $1;
+	}
+	elsif ($peerid =~ /^eX/i) {
+		$ctclient = "eXeem";
+		$ctversion = "";
+	}
+	elsif ($peerid =~ /^346------/i) {
+		$ctclient = "TorrenTopia";
+		$ctversion = "";
+	}
+	elsif ($peerid =~ /^AZ\d\d\d\dBT/i) {
+		$ctclient = "BitTyrant";
+		$ctversion = "";
+	}
+	elsif ($peerid =~ /^0x(....)5253/i) {
+		$ctclient = "Rufus";
+		$ctversion = $1;
+	}
+	else {
+		$ctclient = "Unknown";
+		$ctversion = "";
+	}
+	return "$ctclient $ctversion";
+}
+
+
+sub usage {
+	print "Usage:  $0 [-d <dlimit>] [-u <ulimit>] [-i <interval>] [-p <port>] [-P]\r\n";
+}
+

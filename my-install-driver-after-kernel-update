@@ -1,0 +1,35 @@
+#!/bin/bash
+#
+
+# Set this to the exact path of the driver you plan to use
+# It is recommended to use a symlink here so that this script doesn't
+# have to be modified when you change driver versions.
+DRIVER_SRC_PATH=/usr/src/driver
+COMPILED_DRIVER_NAME="driver.ko"
+DRIVER_PATH=""
+
+function find_driver()
+{
+  DRIVER_PATH=`find "/lib/modules/$1/kernel/drivers" -name "$COMPILED_DRIVER_NAME"`
+}
+
+find_driver
+# Build new driver if it doesn't exist
+if [ -e "$DRIVER_PATH" ] ; then
+    echo "$COMPILED_DRIVER_NAME driver already exists for this kernel." >&2
+else
+    echo "Building $COMPILED_DRIVER_NAME driver for kernel $1" >&2
+    pushd $DRIVER_SRC_PATH
+    # sed makefile of the driver makefile
+     
+    make KDIR="/lib/modules/$1/build" >&2
+    popd
+    find_driver
+    if [ -e "$DRIVER_PATH" ] ; then
+        echo "   SUCCESS: Driver installed for kernel $1" >&2
+    else
+        echo "   FAILURE: Make not succeded" >&2
+    fi
+fi
+
+exit 0

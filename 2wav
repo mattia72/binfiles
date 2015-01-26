@@ -1,0 +1,239 @@
+#!/bin/bash
+#Ez a szkript mp3 és flac fájlokat konvertál wav formátumra
+#Az aktuális könyvtártól lefelé megkeresi a
+#konvertálható fájlokat, helyben létrehoz egy wav könyvtárat
+#és ide teszi az eredményt.
+#lame és flac kell hozzá
+
+
+make_dir="false"
+extra_dir_name="wavs"
+download_only="true"
+recursive="false"
+debug="true"
+
+function short_usage()
+{
+  echo "Használat: `basename $0` [kapcsolók] [fájl-lista | url-lista] "
+}
+
+function usage()
+{
+  short_usage
+  echo "Paraméterek nélkül az aktuális könyvtárban található m3u, mp3, flac, ram és rm"
+  echo "fájlokat konvertálja wav fájlra."
+  echo "-h|--help          : Segítség."
+  echo "-m|--make-dir      : Külön könyvtárat készít a konvertált fájoknak"
+  echo "                     ./$extra_dir_name/ könyvtárba"
+  echo "-d|--download-only : csak letölti az url-t"
+  echo "-r|--recursive     : Az aktuális könyvtártól lefelé rekurzívan keresi a "
+  echo "                     konvertálható fájlokat."
+}
+
+function error_msg()
+{
+  echo "`basename $0`: $1"
+}
+retval_download_url=""
+function download_url()
+{
+  url="$1"
+  if [ `expr match $url '.*\(://\).*'` == "://" ]; then #ha url
+    protokoll=${url%%://*}
+    case $protokoll in
+    FTP|HTTP*);;
+    *)url="http://${url#*://}";;
+    esac
+    if [ "$debug" == "true" ]; then echo "$url letöltése indul $protokoll protokoll szerint"; fi
+    wget "$url"
+    if [ $? -eq 1 ]; then #Ha nem sikerül, kilépünk :(
+      error_msg "Hiba történt letöltés közben."
+      exit 1
+    fi
+    downloaded_file=`basename "$url"`
+    type_ASCII="`file $downloaded_file | grep 'ASCII text'`"
+    if [ -n "$type_ASCII" ]; then
+       if [ "$debug" == "true" ]; then echo "$downloaded_file ASCII típusú..."; fi
+       content_of_downloaded_file="`grep '://' "$downloaded_file" | head --lines=1`"
+       if [ -n "$content_of_downloaded_file" ]; then
+          mv $downloaded_file "$downloaded_file.`basename $0`.tmp"
+          content_of_downloaded_file=${content_of_downloaded_file%%\?*} #levágjuk a kérdőjel utáni részt
+         if [ "$debug" == "true" ]; then echo -e "Tartalma konvertálva:\n$content_of_downloaded_file "; fi
+download_url "$content_of_downloaded"
+          retval_download_url=`basename "$content_of_downloaded_file"`
+        else
+          retval_download_url="$downloaded_file"
+        fi
+    else
+      retval_download_url="$downloaded_file"
+    fi
+  else #ha nem url, nem kell letölteni
+    retval_download_url=$1
+  fi
+  if [ "$debug" == "true" ]; then echo "retval_download_url=$retval_download_url"; fi
+}
+function make_extra_dir()
+{
+  if [ "$make_dir" == "true" ]; then
+    if [ "$debug" == "true" ]; then
+      echo "mkdir -p $extra_dir_name"
+    else
+      mkdir -p $extra_dir_name
+    fi
+  fi
+}
+function convert_mp3()
+{
+  local input="$1"
+  local output="$2"
+  if [ "$debug" == "true" ]; then
+    echo "mp3 -> wav konvertálás: \"$input\" -> \"$output\""
+  else
+      lame --decode "$input" "$output"
+  fi
+}
+function convert_flac()
+{
+  local input="$1"
+  local output="$2"
+  if [ "$debug" == "true" ]; then
+    echo "flac -> wav konvertálás: \"$input\" -> \"$output\""
+  else
+      flac --decode -o "$output" "$input"
+  fi
+}
+function convert_rm()
+{
+  local input="$1"
+  local output="$2"
+  if [ "$debug" == "true" ]; then
+    echo "rm -> wav konvertálás: \"$input\" -> \"$output\""
+  else
+      mplayer -cache 32 -ao pcm:file="$output" "$input"
+  fi
+}
+function convert_ram()
+{
+  local input="$1"
+  local output="$2"
+
+  if [ "$debug" == "true" ]; then
+    echo "ram -> wav konvertálás: \"$input\" -> \"$output\""
+  fi
+  convert_rm "$input" "$output"
+}
+function convert_m3u()
+{
+  local input="$1"
+  local output="$2"
+
+  if [ "$debug" == "true" ]; then
+    echo "m3u -> wav konvertálás: \"$input\" -> \"$output\""
+  fi
+  convert_mp3 "$convert" "$output"
+}
+
+function do_convert()
+{
+  local file="`basename $1`"
+#Ha helyben van pl. egy m3u...
+  type_ASCII="`file $file | grep 'ASCII text'`"
+  if [ -n "$type_ASCII" ]; then
+     if [ "$debug" == "true" ]; then echo "$file ASCII típusú..."; fi
+     content_of_file="`grep '://' "$file" | head --lines=1`"
+     if [ -n "$content_of_file" ]; then
+        if [ "$debug" == "true" ]; then echo -e "Tartalma:\n$content_of_file "; fi
+        download_url "$content_of_file"
+        file="$retval_download_url"
+     fi
+  fi
+
+#Get extension
+  ext=`expr match "$file" '.*\.\([^\.]*\)'`
+#Filename without extension
+  fname=${file%.$ext}
+#echo "$ext - $fname"
+
+
+#külön könyvtár?
+  make_extra_dir
+  dir=`pwd`
+  if [ "$make_dir" == "true" ]; then
+    dir="$dir/$extra_dir_name"
+  fi
+
+  case $ext in
+  [Mm][Pp]3       ) convert_mp3 "$file" "$dir/$fname.wav" ;;
+  [Ff][Ll][Aa][Cc]) convert_flac "$file" "$dir/$fname.wav" ;;
+  [Rr][Aa][Mm]    ) convert_ram "$file" "$dir/$fname.wav" ;;
+  [Rr][Mm]        ) convert_rm  "$file" "$dir/$fname.wav" ;;
+  [Mm]3[Uu]       ) convert_m3u "$file" "$dir/$fname.wav" ;;
+  *               ) error_msg "$file nem támogatott fájltípus" ;;
+  esac
+}
+
+function do_convert_in_current_dir()
+{
+  if [ "$#" -eq "1" ]; then
+    pushd "$1/" >/dev/null
+  fi
+
+  for file in *
+  do
+    if [[ "$recursive" == "true" && -d "$file" ]]  #ha könyvtár, menj bele
+    then
+      pushd "$file/" > /dev/null
+      echo "cd `pwd`"
+      do_convert_in_current_dir
+      popd > /dev/null
+      echo "cd `pwd`"
+    fi
+    do_convert $file
+  done
+
+  if [ "$#" -eq "1" ]; then
+    popd  >/dev/null
+  fi
+}
+############################## ITT KEZDŐDIK A SZKRIPT ############################
+
+#Ha nincs paraméter akkor az aktuális könyvtárat konvertálja
+#Ha van legalább egy paraméter...
+
+file_list_is_given="false"
+until [ -z "$1" ]
+do
+    case $1 in
+       -h|--help          ) usage; exit;;
+       -m|--make-dir      ) make_dir="true";;
+       -d|--download-only ) download_only="true";;
+       -r|--recursive     ) recursive="true";;
+       -rm|-mr            ) make_dir="true";
+                            recursive="true";;
+       *                  )
+                        if [ `expr match $1 '.*\(://\).*'` == "://" ]; then #ha url
+                            download_url $1
+                            if [ "$download_only" != "false" ]; then
+                              do_convert "$retval_download_url"
+                            fi
+                            file_list_is_given="true"
+                        elif [ -d "$1" ]; then # ha könyvtár
+                            do_convert_in_current_dir "$1"
+                            file_list_is_given="true"
+                        elif [ -f "$1" ]; then #ha fájl
+                            do_convert $1
+                            file_list_is_given="true"
+                        else
+                          error_msg "$1 érvénytelen paraméter!"
+                          usage; exit
+                        fi ;;
+    esac
+    shift
+done
+
+#Ha nincs paraméter akkor az aktuális könyvtárat konvertálja
+if [ "$file_list_is_given" == "false" ]; then
+  do_convert_in_current_dir
+fi
+
+exit $?

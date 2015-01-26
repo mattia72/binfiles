@@ -1,0 +1,70 @@
+#!/bin/bash
+
+script=`basename $0`
+debug=0
+
+function usage()
+{
+  echo -e "${script}:"
+  echo -e "usage: ${script} [url] [url] ... [url]"
+  echo -e "       url:    a video url from youtube"
+  echo -e "               eg.:http://www.youtube.com/watch?v=adzkV58Gpqs"
+}
+function debugtrace()
+{
+	if [ ${debug} -gt 0 ]
+  then
+		echo -e "${script}: $1";
+	fi
+}
+
+if [[ $# -lt 1 ]];
+then
+	usage
+	exit 1
+fi
+
+function down_and_conv ()
+{
+	video_url=$1
+	tmp_file="tmp_video.flv"
+	base_url="http://youtube.com/get_video.php?"
+	#extract video id from URL
+	video_id=$(links2 -source ${video_url} | grep player2.swf | cut -d? -f2 | cut -d\" -f1)
+
+	#doesn't work
+	#video_id=`echo "$1" | sed 's/.*\?.*=\(.*\)/\1/'`
+
+	debugtrace "video id = ${video_id}"
+
+	video_url=${base_url}${video_id}
+	#doesn't work
+	#video_url=`wget -q "http://www.youtube.com/watch?v=$vid" -O - | sed -n 's/^.*player.*.swf\([^"]*\).*$/http:\/\/www.youtube.com\/get_video\1/p'`
+
+	debugtrace "video url = ${video_url}"
+
+	if [[ -f ${tmp_file} ]];
+	then
+	 rm -f ${tmp_file} ;
+	fi
+
+	echo -e "Download started...\n"
+	wget ${video_url} -O ${tmp_file}
+
+	video_name=$( links2 -source $1 | egrep '<h1 id="video_title">'| cut -d\< -f2 |cut -d\> -f2)
+
+	debugtrace "{video_name}=${video_name}"
+
+        echo -e "\nConverting...\n"
+	ffmpeg -i ${tmp_file} -ab 56 -ar 22050 -b 500 -s 320x240 "${video_name}.mpg"
+	if [ $? -ne 0 ]
+        then
+           echo "${video_name} doesn't converted!"
+           mv -v ${temp_file} "${video_name}.flv"
+	else
+	   rm -vf ${tmp_file}
+	   echo "${video_name} converted succesfully!"
+	fi
+}
+
+until [ -z "$1" ]; do  down_and_conv "$1";  shift; done

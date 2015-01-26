@@ -1,0 +1,13 @@
+#!/bin/bash
+function wait_some_secs()
+{
+	count="$1"
+	echo -n "Wait... "$count"s"
+	while ((count--))
+	do
+		echo -ne "\rWait... "$count"s       "
+		sleep 1
+  done
+  echo
+}
+wait_some_secs $1

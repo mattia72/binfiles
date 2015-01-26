@@ -1,0 +1,121 @@
+#!/bin/bash
+#Calculates elapsed time between two cals of this script
+
+now=`date +%s`
+secs=""
+mins=""
+hours=""
+days=""
+last_modify_time=""
+E_BADARGS=65
+
+function usage_and_exit()
+{
+  script_name=`basename $0`
+  if [ $# -gt 0 ]; then
+	echo -e "$script_name: $@" 1>&2
+	echo -e "Try \`$script_name --help' for more information."
+	exit $E_BADARGS
+  fi
+  echo -e "Usage: ${script_name} [options] measure-name\n"
+  echo -e "  Without any options the first call creates a tmp file with the name of \"measure-name\"."
+  echo -e "  Further calls of the script echos the elapsed time from the first call."
+  echo -e "  Options:"
+  echo -e "  -s |--start       : start measurement, initializing."
+  echo -e "  -p |--pause       : pause measurement, if not paused yet. "
+  echo -e "                      After this call the output of the next calls remains the same."
+  echo -e "  -r |--restart     : restart measurement, only after pause."
+  echo -e "  -e |--end |--stop : end measurement, remove temp file\n"
+  echo -e "  -h |--help        : show this help\n"
+  exit 0
+}
+
+function calculate_and_echo_elapsed()
+{
+	if [ -s "$filename" ];then # measurement paused
+		now=`cat "$filename"` 	#else now is current epoch
+	fi
+
+	if [ -z $last_modify_time ]; then
+		last_modify_time=`stat -c%Y "$filename"`
+	fi
+
+	secs=$(( now - last_modify_time ))
+	days=$(( secs / (3600*24) ))
+	(( secs -= days * (3600*24) ))
+	hours=$(( secs / 3600 ))
+	(( secs -= (hours * 3600) ))
+	mins=$(( secs / 60 ))
+	(( secs -= (mins * 60) ))
+
+	if [ $days -eq 0 ]; then days=""; else days="$days day(s) "; fi
+	if [ $hours -lt 10 ]; then hours="0$hours"; fi
+	if [ $mins -lt 10 ]; then mins="0$mins"; fi
+	if [ $secs -lt 10 ]; then secs="0$secs"; fi
+
+	echo "${days}${hours}:${mins}:${secs}"
+}
+
+formated_time=""
+function format_touch_time()
+{
+	formated_time=`awk "BEGIN{print strftime(\"%Y%m%d%H%M.%S\",$1)}"`
+}
+
+if [ -z "$1" ]; then  usage_and_exit "missing operand" ; fi
+
+rm_tmp_file=0
+case "$1" in
+	-s|--start)
+			if [ -z "$2" ]; then usage_and_exit "missing operand"; fi
+			filename="$2"
+			#create or overvrite the file...
+			: > "$filename"   # File  now empty.
+			;;
+	-p|--pause)
+			if [ -z "$2" ]; then usage_and_exit "missing operand"; fi
+			filename="$2"
+			if [ ! -s "$filename" ]
+			then # measurement not paused yet
+				last_modify_time=`stat -c%Y "$filename"`
+				echo "$now" > "$filename"
+				#write back the last modi time
+				format_touch_time "$last_modify_time"
+				touch -t "$formated_time" "$filename"
+			else
+				usage_and_exit "measurement paused already, can't pause again."
+			fi
+			;;
+	-r|--restart)
+			if [ -z "$2" ]; then usage_and_exit "missing operand"; fi
+			filename="$2"
+			if [ -s "$filename" ]
+			then # measurement not paused yet
+				last_modify_time=`stat -c%Y "$filename"`
+				paused=$(( last_modify_time + now - `cat "$filename"`  ))
+				: > "$filename"   # File  now empty.
+				format_touch_time "$paused"
+				touch -t "$formated_time" "$filename"
+			else
+				usage_and_exit "measurement not paused yet, can't restart."
+			fi
+			;;
+	-e|--end|--stop)
+			if [ -z "$2" ]; then usage_and_exit "missing operand"; fi
+			rm_tmp_file=1
+			filename="$2"
+			;;
+	-h|--help)
+			usage_and_exit
+			;;
+			*) #no options, first param is a filename
+			filename="$1"
+			;;
+esac
+#first call: create the file
+if [ ! -e "$filename" ]; then : > "$filename"; fi
+#second call: calculate & echo elapsed time
+calculate_and_echo_elapsed
+#clean...
+if [ $rm_tmp_file -eq 1 ]; then rm -f "$filename"; fi
+exit 0

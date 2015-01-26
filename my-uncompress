@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# mindent kicsomagol
+
+function ee() 
+{ # echo and execute
+echo "$@"
+$1 "$2"
+}
+
+function extract()
+{
+  for x in "$@"; do
+    [[ -f $x ]] || continue
+    case "$x" in
+    *.tar.bz2 | *.tgz ) ee "tar xvjf" "$x"  ;;
+    *.tar.gz | *.tbz2 ) ee "tar xvzf" "$x"  ;;
+    *.bz2 )             ee "bunzip2" "$x"   ;;
+    *.rar )             ee "unrar e" "$x"   ;;
+    *.gz )              ee "gunzip" "$x"    ;;
+    *.tar )             ee "tar xvf" "$x"   ;;
+    *.zip )             ee "unzip" "$x"     ;;
+    *.Z )               ee "uncompress" "$x";;
+    *.7z )              ee "7z x" "$x"      ;;
+  esac
+done
+}
+
+extract "$@"

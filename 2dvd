@@ -1,0 +1,104 @@
+#!/bin/bash
+function short_usage()
+{
+	echo "Használat: ${0##*/} [video] "
+}
+
+if [[ "$#" < "1" ]]
+then
+	short_usage
+	exit 0
+fi
+
+echo '
+Converts a video to DVD. Available methods:
+'
+echo " 1. mencoder to Wide-screen PAL DVD MPEG"
+echo " 2. mencoder to Full-screen PAL DVD MPEG "
+echo " 3. mencoder to PAL VCD MPEG"
+echo " 4. mencoder to Wide-screen NTSC DVD MPEG"
+echo " 5. mencoder to Full-screen NTSC DVD MPEG"
+echo " 6. mencoder to NTSC VCD MPEG"
+echo " 7. ffmpeg to Wide-screen PAL DVD MPEG"
+echo " 8. ffmpeg to Full-screen PAL DVD MPEG"
+echo " 9. ffmpeg to PAL VCD MPEG"
+echo "10. ffmpeg to Wide-screen NTSC DVD MPEG"
+echo "11. ffmpeg to Full-screen NTSC DVD MPEG"
+echo "12. ffmpeg to NTSC VCD MPEG"
+
+echo -n '
+Choose your favorite method [1-12]: '
+read selected
+
+
+for video in $*
+do
+	if [[ $selected -gt 0 && $selected -le 12 ]]
+  then
+		filename=`basename $video`
+		echo
+		echo "Converting $filename --> ${filename%.*}.mpg with"
+	fi
+	case "$selected" in
+		"1")
+		echo "mencoder to Widescreen PAL DVD MPEG..."
+		echo
+		mencoder -oac lavc -ovc lavc -of mpeg -mpegopts format=dvd -vf scale=720:576,harddup -srate 48000 -af lavcresample=48000 -lavcopts vcodec=mpeg2video:vrc_buf_size=1835:vrc_maxrate=9800:vbitrate=5000:keyint=15:acodec=ac3:abitrate=192:aspect=16/9 -ofps 25 -o ${video%.*}.mpg $video
+		;;
+		"2")
+		echo "mencoder to Fullscreen PAL DVD MPEG..."
+		echo
+		mencoder -oac lavc -ovc lavc -of mpeg -mpegopts format=dvd -vf scale=352:576,harddup -srate 48000 -af lavcresample=48000 -lavcopts vcodec=mpeg2video:vrc_buf_size=1835:vrc_maxrate=9800:vbitrate=5000:keyint=15:acodec=ac3:abitrate=192:aspect=4/3 -ofps 25 -o ${video%.*}.mpg $video
+		;;
+		"3")
+		echo "mencoder to PAL VCD MPEG..."
+		echo
+		mencoder -oac lavc -ovc lavc -of mpeg -mpegopts format=xvcd -vf scale=352:288,harddup -srate 44100 -af lavcresample=44100 -lavcopts vcodec=mpeg1video:keyint=15:vrc_buf_size=327:vrc_minrate=1152:vbitrate=1152:vrc_maxrate=1152:acodec=mp2:abitrate=224 -ofps 25 -o ${video%.*}.mpg $video
+		;;
+		"4")
+		echo "mencoder to Widescreen NTSC DVD MPEG..."
+		echo
+		mencoder -oac lavc -ovc lavc -of mpeg -mpegopts format=dvd -vf scale=720:480,harddup -srate 48000 -af lavcresample=48000 -lavcopts vcodec=mpeg2video:vrc_buf_size=1835:vrc_maxrate=9800:vbitrate=5000:keyint=18:acodec=ac3:abitrate=192:aspect=16/9 -ofps 30000/1001 -o ${video%.*}.mpg $video
+		;;
+		"5")
+		echo "mencoder to Fullscreen NTSC DVD MPEG..."
+		echo
+		mencoder -oac lavc -ovc lavc -of mpeg -mpegopts format=dvd -vf scale=352:480,harddup -srate 48000 -af lavcresample=48000 -lavcopts vcodec=mpeg2video:vrc_buf_size=1835:vrc_maxrate=9800:vbitrate=5000:keyint=18:acodec=ac3:abitrate=192:aspect=4/3 -ofps 30000/1001 -o ${video%.*}.mpg $video
+		;;
+		"6" )
+		echo "mencoder to NTSC VCD MPEG..."
+		echo
+		mencoder -oac lavc -ovc lavc -of mpeg -mpegopts format=xvcd -vf scale=352:240,harddup -srate 44100 -af lavcresample=44100 -lavcopts vcodec=mpeg1video:keyint=18:vrc_buf_size=327:vrc_minrate=1152:vbitrate=1152:vrc_maxrate=1152:acodec=mp2:abitrate=224 -ofps 30000/1001 -o ${video%.*}.mpg $video
+		;;
+		"7" )
+		echo "ffmpeg to Widescreen PAL DVD MPEG..."
+		echo
+		ffmpeg -i $video -target pal-dvd -aspect 16:9 ${video%.*}.mpg
+		;;
+		"8" )
+		echo "ffmpeg to Fullscreen PAL DVD MPEG..."
+		echo
+		ffmpeg -i $video -target pal-dvd -aspect 4:3 ${video%.*}.mpg
+		;;
+		"9" )
+		echo "ffmpeg to PAL VCD MPEG"
+		ffmpeg -i $video -target pal-vcd ${video%.*}.mpg
+		;;
+		"10" )
+		echo "ffmpeg to Widescreen NTSC DVD MPEG..."
+		echo
+		ffmpeg -i $video -target ntsc-dvd -aspect 16:9 ${video%.*}.mpg
+		;;
+		"11" )
+		echo "ffmpeg to Fullscreen NTSC DVD MPEG"
+		ffmpeg -i $video -target ntsc-dvd -aspect 4:3 ${video%.*}.mpg
+		;;
+		"12" )
+		echo "ffmpeg to NTSC VCD MPEG..."
+		echo
+		ffmpeg -i $video -target ntsc-vcd ${video%.*}.mpg
+		;;
+		*) echo "No method selected, exit."
+		;;
+	esac
+done

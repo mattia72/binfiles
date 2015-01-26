@@ -1,0 +1,8 @@
+#!/bin/bash
+#http://www-128.ibm.com/developerworks/aix/library/au-unix-find.html
+ext_to_check=$1
+ext_to_delete=$2
+
+# a find megtalálja az ext_to_check kiterjesztésű fájlokat, amiket átad a
+# my-rm-if-other-exists szkriptnek...
+find . \( -name "*.$ext_to_check" \) -exec my-rm-if-other-exists "{}" "$ext_to_check" "$ext_to_delete" \;

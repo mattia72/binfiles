@@ -1,0 +1,4 @@
+#!/bin/bash
+grep -i -h "$*" /home/mata/bin/de-hu-dict/*.txt |
+sed 's/ *| */; /g' |
+grep -i --color "$*"

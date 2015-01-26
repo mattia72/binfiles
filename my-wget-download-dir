@@ -1,0 +1,11 @@
+#!/bin/bash
+
+for i in `cat file.list`
+do
+	dir=`echo "$i" | sed 's/^.*\/\(.*\)\/.*/\1/'` #extract dir from the url
+	mkdir "$dir"
+	pushd "$dir"
+	wget "$i"
+	popd
+done;
+

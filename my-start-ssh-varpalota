@@ -1,0 +1,2 @@
+#!/bin/bash
+ssh -p 223 -L 5900:localhost:5900 -X akos@varpalota.homelinux.net

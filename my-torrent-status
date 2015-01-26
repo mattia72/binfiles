@@ -1,0 +1,113 @@
+#!/bin/bash 
+
+WGET_OUT="wget_out.$RANDOM"
+STATUS_FILE="ctorrent_status.$RANDOM"
+STATUS_OUT="ctorrent.status"
+STATUS_HTML="ctorrent.status.html"
+HTML_OUT="yes"
+seed_time_limit=48
+
+pushd /home/mata/torrents/ctorrents
+
+line=""
+function download_ctcs_main_page()
+{
+      url=`expr "$line" : '.* | \([^|]*\)'`
+      #echo torr=$torrent_name url=$url
+      wget -O $WGET_OUT $url &> /dev/null
+}
+ratio=""
+function get_ratio()
+{
+      ratio_line=`grep "Upload/Download Ratio" "$WGET_OUT"`
+      ratio=`expr match "$ratio_line" '.*<B>\(.*\)</B>'`
+}
+seed_time=""
+function get_seed_time()
+{
+      seed_time_line=`grep "name=\"seed_time\"" "$WGET_OUT"`
+      seed_time=`expr match "$seed_time_line" '.*value=\"\(.*\)\"'`
+      seed_time=$(echo "$seed_time_limit - $seed_time" | bc -q)
+}
+torrent_name=""
+function get_torrent_name()
+{
+      torrent_name=`expr "$line" : '\(^[^|]*\) |'`
+}
+download_procent=""
+function get_download_procent()
+{
+      download_procent=""
+      if [ -n "$torrent_name" ]
+      then
+        title="${torrent_name//\[*\]/}" #cut [..]
+        download_procent=$(grep -Fa2 "$torrent_name" "$WGET_OUT" | sed '/^<TR><TD>/!d; s/.*<TD> *\([0-9]*%\)/\1/')
+      fi
+}
+function write_status_file()
+{
+	wget -O $WGET_OUT http://localhost:2780/ &> /dev/null
+  #echo "wget returned: $?"
+
+  if [[ "$?" != 0 ]]
+    then
+    echo "WGET error! CTCS doesn't run? No status has been written :("
+    return
+    fi
+
+	  # todo : ezt úgy kéne, hogy csak az aktívok legyenek benne...
+	sed  '/\.torrent/!d; s/.*<A HREF="\(.*\)"><B>\(.*\)<\/B><\/A>/\2 | http:\/\/localhost:2780\1/' $WGET_OUT > $STATUS_FILE
+	if [[ $HTML_OUT == "yes" ]]
+  then
+    echo "<HTML><HEAD><TITLE>CTorrents status</TITLE></HEAD><BODY>" > "$STATUS_HTML"
+    echo '<TABLE>
+      <colgroup>
+      <col width="70%">
+      <col width="10%">
+      <col width="10%">
+      <col width="10%">
+      </colgroup>
+   ' > "$STATUS_HTML"
+  fi
+  date > "$STATUS_OUT" #empty status out file
+	while read line
+		do
+      download_ctcs_main_page
+      get_torrent_name
+      get_download_procent
+      get_ratio
+      get_seed_time
+      if [[ $HTML_OUT == "yes" ]]
+      then
+        echo "<tr><td>$torrent_name</td><td>$download_procent</td><td>r=$ratio</td><td>t=$seed_time</td><tr>" >> "$STATUS_HTML"
+      fi
+      echo "$torrent_name | $download_procent | r=$ratio | t=$seed_time" >> "$STATUS_OUT"
+		done < $STATUS_FILE
+	  
+	if [[ $HTML_OUT == "yes" ]]
+  then
+    echo "</TABLE></BODY></HTML>" >> "$STATUS_HTML"
+  fi 
+
+  clear
+  echo
+  cat "$STATUS_OUT" | sort
+
+	rm "$STATUS_FILE"
+	rm "$WGET_OUT"
+}
+
+while true
+	do
+		write_status_file
+		if [[ $# > 0 ]]
+			then
+        sleep "$1"
+			else
+				break;
+	  	fi
+	done
+
+popd
+
+

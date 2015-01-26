@@ -1,0 +1,4 @@
+#!/bin/bash
+# Milyen csoportokba tartozik?
+
+cat /etc/group | grep "$1" | cut -d : -f 1

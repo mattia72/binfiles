@@ -1,0 +1,194 @@
+#!/bin/bash
+
+# Run this script with cron daemon
+# crontab -e
+# insert this:
+## Backup some config files
+#0 20 * * *  /home/mata/bin/my-backup backup-list.$list_extension
+
+backup_dir="/home/mata/Ubuntu One/rdiff-backups"
+extension="secret-backup"
+list_extension="backup-list"
+remove_older_than=1M #s, m, h, D, W, M, or Y, indicating seconds, minutes, hours, days, weeks, months, or years
+password="efe+oiu3nl%#"
+backup_owned_by="mata"
+
+function usage()
+{
+  echo
+  echo "Yet another rdiff-backup wrapper. "
+  echo
+  echo "Usage: `basename $0` [-l|-c]  filename.$list_extension"
+  echo '      -l, --list    : lists increments in the backup,
+                          if secret-backup exists, then it will be decrypted, than listed.'
+  echo "      -c, --compress: creates secure compressed backup."
+  echo "      filename.$list_extension : file with .$list_extension extension, that contains the backup list"
+  echo
+  echo "Backups are saved in \"$backup_dir/filename/ in case of normal backup."
+  echo "and \"$backup_dir/filename.$extension\" in case of secure backup."
+  echo "Older backups then \"$remove_older_than\" will be removed!"
+  exit $1;
+}
+
+backup_subdir=""
+function get_backup_subdir()
+{
+  fname=`basename "$1"`
+  backup_subdir="${fname%.$list_extension}"
+  /bin/mkdir -p "$backup_dir/$backup_subdir"
+}
+
+function check_exit_status()
+{
+    if [ $1 -eq 0 ];
+    then
+	    echo "Operation succeeded :)"
+    else
+	    echo "Operation failed :("
+    fi
+}
+
+random_name=""
+function create_random_name()
+{
+  BASE_STR=`/usr/bin/mcookie`   # 32-character magic cookie.
+  POS=1                # Arbitrary position in magic cookie string.
+  LEN=8                # Get $LEN consecutive characters.
+  #prefix=$(date +%s)  # The "+%s" option to 'date' is GNU-specific.
+  # Extract a 5-character string, starting at position 11.
+  suffix=${BASE_STR:POS:LEN}
+  prefix="my-backup-tmp"
+  # Construct the filename.
+  random_name=$prefix.$suffix
+  #echo "Temp filename = "$temp_filename""
+}
+
+function create_tmp_dir()
+{
+  create_random_name
+  temp_dir="/tmp/$random_name"
+  /bin/mkdir -p "$temp_dir"
+}
+
+function secret_untar_to_tmp()
+{
+  echo "Untar $1 archive to \"$temp_dir\"..."
+  pushd "$temp_dir" > /dev/null
+  /bin/dd if="$1" | /usr/bin/openssl des3 -salt -d -k "$password"| /bin/tar xfz -
+  check_exit_status $?
+  popd > /dev/null
+}
+
+function secret_tar_from_tmp_to_backup()
+{
+    pushd "$temp_dir" > /dev/null
+    /bin/tar cfz - "$backup_subdir" | /usr/bin/openssl des3 -salt -k "$password" | /bin/dd of="$backup_dir/$backup_subdir.$extension"
+    check_exit_status $?
+    popd > /dev/null
+}
+
+function del_temp()
+{
+  echo "Delete temporary files from $temp_dir"
+  rm -rf "$temp_dir" &
+}
+
+function compute_saved_size()
+{
+  #count saved size...
+   whole_dir_size=$(/usr/bin/du -s "$temp_dir" | /usr/bin/cut -f1)
+   tarball_size=$(/usr/bin/du -s "$backup_dir/$backup_subdir.$extension" | /usr/bin/cut -f1)
+   echo "Saved $((whole_dir_size - tarball_size)) Bytes with zipped backup."
+}
+
+case "$1" in
+  -h|--help)
+    usage 0
+  ;;
+#list backup increments
+  -l|--list)
+    if [[ $# != 2 ]]; then usage 1; fi
+    shift
+    get_backup_subdir "$1"
+    secret_gz_file_name="$backup_dir/$backup_subdir.$extension"
+    if [ -e "$secret_gz_file_name" ]; then
+      echo "Listing increments in \"$secret_gz_file_name\"..."
+      # untar to temp
+      create_tmp_dir
+      secret_untar_to_tmp "$secret_gz_file_name"
+      # listing...
+      echo "--------------------------------"
+      /usr/bin/rdiff-backup --list-increments "$temp_dir/$backup_subdir"
+      echo "--------------------------------"
+      # delete temp...
+      compute_saved_size
+      del_temp
+    else
+      # listing...
+      echo "--------------------------------"
+      /usr/bin/rdiff-backup --list-increments "$backup_dir/$backup_subdir"
+      echo "--------------------------------"
+    fi
+
+  ;;
+#backup filelist from file
+  *)
+
+  compress=0
+  case "$1" in
+    -c|--compress)compress=1; shift;;
+    *);;
+  esac
+
+  if [ -e "$1" ] #list file exists
+  then
+    #backup
+    get_backup_subdir "$1"
+    if [[ $compress != 0 ]]; then #compress...
+      create_tmp_dir
+      if [ -e "$backup_dir/$backup_subdir.$extension" ] #if backup exists yet...
+      then
+        secret_untar_to_tmp "$backup_dir/$backup_subdir.$extension"
+      fi
+      echo "Creating backup to \"$temp_dir/$backup_subdir\"..."
+      echo "--------------------------------"
+      cat "$1" | /usr/bin/rdiff-backup --include-globbing-filelist-stdin --exclude '**' / "$temp_dir/$backup_subdir"
+      check_exit_status $?
+      echo "--------------------------------"
+      #remove older backups
+      echo "Remove backups older then \"$remove_older_than\"... "
+      echo "--------------------------------"
+      /usr/bin/rdiff-backup --force --remove-older-than $remove_older_than "$temp_dir/$backup_subdir"
+      check_exit_status $?
+      echo "--------------------------------"
+      echo "Creating gzip archive to \"$backup_dir/$backup_subdir.$extension\"..."
+      /bin/mkdir -p "$backup_dir" #create backupdir if not exists
+      secret_tar_from_tmp_to_backup
+      compute_saved_size
+      # delete temp...
+      del_temp
+    else
+      echo "Creating backup to \"$backup_dir/$backup_subdir\"..."
+      echo "--------------------------------"
+      cat "$1" | /usr/bin/rdiff-backup --include-globbing-filelist-stdin --exclude '**' / "$backup_dir/$backup_subdir"
+      check_exit_status $?
+      echo "--------------------------------"
+      #remove older backups
+      echo "Remove backups older then \"$remove_older_than\"... "
+      echo "--------------------------------"
+      /usr/bin/rdiff-backup --force --remove-older-than $remove_older_than "$backup_dir/$backup_subdir"
+      check_exit_status $?
+      echo "--------------------------------"
+   fi
+   echo "Call chown -hR $backup_owned_by $backup_dir/$backup_subdir"
+   #ubuntu one needs owner rights on the synchronized files
+   /bin/chown -hR "$backup_owned_by" "$backup_dir/$backup_subdir"
+   check_exit_status $?
+   echo "--------------------------------"
+  else
+    echo "Error: backup-list \"$1\" not exists! "
+    usage 1
+  fi
+  ;;
+esac
+

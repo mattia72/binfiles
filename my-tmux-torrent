@@ -1,0 +1,150 @@
+#!/bin/bash 
+#set -x
+
+
+tmux_session_name="torrent"
+tmux_prog_name="byobu-tmux"
+tmux_pattern=".*SCREEN\.real.*"
+ready_cmd="-X kdialog --msgbox" #todo
+torrent_client=`which ctorrent`
+torrent_param='-S localhost:2780'
+STATUS_OUT="ctorrent.status"
+seed_time_limit=49
+ratio_limit="1.10"
+
+pushd /home/mata/Letöltések/downloads
+touch $STATUS_OUT 
+
+function has-session {
+    tmux has-session -t $1 2>/dev/null
+}
+
+function start_tmux()
+{
+	if [ not $(tmux has_session -t $tmux_session_name 2>/dev/null) ]
+	then
+		#echo "Create new tmux session..."
+		tmux new-session -d -s $tmux_session_name
+		#screen -dmS "$tmux_session_name"
+	fi
+}
+
+function start_lynx()
+{
+  title="lynx"
+  cmd="/usr/bin/lynx"
+  param="http://localhost:2780/"
+	echo "Create window $tmux_session_name::$title"
+	tmux neww -n "$title" -t $tmux_session_name "$cmd $param"
+}
+
+function start_ctcs()
+{
+	title="CTC-Server"
+	cmd="/home/mata/bin/ctcs"
+	found=$(pgrep -lf "$cmd")
+	if [ -z "$found" ]
+	then
+		echo "Create window $tmux_session_name::$title"
+		#screen -S "$tmux_session_name" -X tmux -t "$title" "$cmd"
+		tmux neww -n "$title" -t $tmux_session_name "$cmd"
+	fi
+}
+
+function start_ctorrents()
+{
+  i=0
+	while [ "$i" -lt "${#torrent_list[@]}" ]
+	do
+    #    echo "$i : ${torrent_list[$i]}"
+    #     read
+		title="${torrent_list[$i]%.torrent}"    #cut .torrent from the end
+		title="${title//\[*\]/}" #cut [..]
+    found=$(pgrep -lf ".*$torrent_client.*$title")
+    #     echo "- $title - $torrent_client.*${torrent_list[$i]} -"
+    #     read
+		if [ -z "$found" ]
+		then
+			echo "Create window $tmux_session_name::$title"
+
+      #get ratio and time from status file
+      ratio=$(sed '/'"$title"'/!d; s/.*r=\([0-9.]*\).*/\1/' $STATUS_OUT)
+      time=$(sed '/'"$title"'/!d; s/.*t=\([0-9.]*\).*/\1/' $STATUS_OUT)
+      #echo "1. r=$ratio t=$time"
+      if [[ "$ratio" == "" ]]; then
+        ratio="$ratio_limit"
+      else
+        ratio=$(echo "$ratio_limit - $ratio" | bc -q)
+      fi
+
+      if [[ "$time" == "" ]]; then
+        time="$seed_time_limit"
+      else
+        time=$(echo "$seed_time_limit - $time" | bc -q)
+      fi
+      #echo "2. r=$ratio t=$time"
+      #read
+      if [[ `echo "$time == 0 || $ratio == 0" | bc -q` == 1 ]]; then
+        echo "Torrent `$title` seeding completed yet."
+        mv -v "${torrent_list[$i]}" "${torrent_list[$i]}.ready"
+        continue
+      fi
+
+			#tmux -S "$tmux_session_name" -X tmux -t "$title" echo "$torrent_client $torrent_param -E $ratio -e $time ${torrent_list[$i]}"
+			tmux neww -n "$title" -t $tmux_session_name "$torrent_client $torrent_param -E $ratio -e $time ${torrent_list[$i]}"
+      #read
+      echo "${torrent_list[$i]} started with r=$ratio t=$time" 
+
+			echo "Sleep a minute... waiting for integrity check..."
+			sleep 1m #wait for integrity check...
+		fi
+    (( i++ ))
+	done
+}
+
+function start_write_status()
+{
+	status_script="/home/mata/bin/my-torrent-status"
+	title="Status"
+	found=$(pgrep -lf "$status_script")
+	if [ -z "$found" ]
+	then
+		echo "Create window for $status_script"
+		tmux neww -n "$title" -t $tmux_session_name $status_script "1m"
+	#	tmux neww -n "$title" -t $tmux_session_name echo "Endless status writer started..."
+	fi
+}
+
+echo "Starts ctorrent for all new torrent file in `pwd`"
+echo -n "Press enter to continue, or Ctrl-C to abort!"
+read
+
+start_tmux
+
+IFS='
+' read -d '' -a torrent_list< <(ls -1t *.torrent) # <(command) named pipe, olyan mintha file lenne
+
+echo "${#torrent_list[*]} torrent file found."
+i=0
+while [ $i -lt ${#torrent_list[*]} ]
+do
+  echo "$i: ${torrent_list[$i]}"
+  ((i++))
+done
+
+if [[ ${#torrent_list[@]} > 0 ]]
+then
+	start_ctcs
+fi
+
+start_ctorrents
+start_write_status
+
+if [[ ${#torrent_list[@]} > 0 ]]
+then
+	start_lynx
+fi
+
+byobu attach -t $tmux_session_name
+
+popd

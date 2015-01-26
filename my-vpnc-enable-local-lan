@@ -1,0 +1,16 @@
+#!/bin/bash
+#################################################
+# change these values to suite your needs
+LOCALNET=10.10.0.0 #192.168.64.0
+LOCALMASK=255.255.0.0
+SECDEV=tun0
+
+LOCALGW=192.168.1.1
+LOCALDEV=eth1
+#################################################
+echo "route del default"
+sudo route del default
+echo "route add default $LOCALGW"
+sudo route add default gw $LOCALGW
+echo "route add -net $LOCALNET netmask $LOCALMASK dev $SECDEV"
+sudo route add -net $LOCALNET netmask $LOCALMASK dev $SECDEV

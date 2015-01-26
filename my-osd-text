@@ -1,0 +1,25 @@
+#!/bin/bash
+loop_timeout=8
+color="red"
+
+font="-b&h-lucida-bold-i-normal-*-26-*-*-*-*-*-*-*"
+
+function osd_text()
+{
+#$1 msg
+#$2 pos
+#$3 align
+  /bin/echo -e "$1" | \
+  DISPLAY=:0 \
+  /usr/bin/osd_cat \
+        --font="${font}" \
+        --color=${color} \
+        --pos="$2" \
+        --align="$3" \
+        --offset=50 \
+        --indent=20 \
+        --shadow=2 \
+        --delay=${loop_timeout}
+}
+
+osd_text "$1" "middle" "center"

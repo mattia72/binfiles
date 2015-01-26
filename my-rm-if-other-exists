@@ -1,0 +1,14 @@
+#!/bin/bash
+#http://www-128.ibm.com/developerworks/aix/library/au-unix-find.html
+file_to_check=$1
+ext_to_check=$2
+ext_to_delete=$3
+
+file_to_del="${file_to_check/%$ext_to_check}$ext_to_delete"
+
+if [ -e "$file_to_del" ]
+then
+	echo "\"$file_to_check\" létezik"
+	rm -v "$file_to_del" #törölve
+	echo "------------"
+fi

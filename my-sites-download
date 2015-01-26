@@ -1,0 +1,30 @@
+#!/bin/bash
+
+backup_dir="/home/mata/www/"
+cmd="/home/mata/bin/my-wget-site"
+
+# password fájl létrehozása
+#$ echo passwd | mcrypt > ~/.ftp-pwd.nc
+key="hu%de#secure?ez<a!kulcs"
+passwd=`mcrypt -dq -k $key --force < /home/mata/.ftp-pwd.nc`
+passwd2=`mcrypt -dq -k $key --force < /home/mata/.ftp-mattiassicha-pwd.nc`
+
+$cmd --no-verbose --dokuwiki --user=mattiassich --password="$passwd" ftp://ftp.extra.hu/wwwroot/ "$backup_dir"
+
+$cmd --no-verbose --dokuwiki --user=mattiassicha --password="$passwd2" ftp://ftp.extra.hu/wwwroot/ "$backup_dir"
+
+$cmd --no-verbose --dokuwiki --user=villanegra --password="MarcoPol0.1" ftp://ftp.extra.hu/wwwroot/ "$backup_dir"
+
+$cmd --no-verbose --no-dokuwiki --user=lelkesmark --password="$passwd" ftp://ftp.extra.hu/wwwroot/ "$backup_dir"
+
+$cmd --no-verbose --no-dokuwiki --user=seeyouk --password="$passwd" ftp://ftp.extra.hu/wwwroot/ "$backup_dir"
+
+$cmd --no-verbose --no-dokuwiki http://nagyotto.fw.hu "$backup_dir"
+
+# mindent bele a www-data csoportba
+#echo $passwd | sudo -S chown -R `whoami`:www-data "$backup_dir"
+# user és csoport jogai
+#echo $passwd | sudo -S chmod -R ug+w "$backup_dir"
+
+
+# kfmclient exec "http://localhost/`whoami`/" &

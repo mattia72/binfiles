@@ -1,0 +1,78 @@
+#!/bin/bash
+
+#Példa url-ek
+#http://hu.wikiquote.org/wiki/Nap_Idézete_archívum
+#http://hu.wikiquote.org/wiki/Woody_Allen
+
+if [ $# -lt 2 ]; then
+  echo "Használat: `basename $0` url dbnév [író_neve]"
+  echo "    url  : Wikipédia oldal"
+  echo "    dbnév: a készítendő fájlok neve: dbnév és dbnév.dat"
+  echo " író-neve: az idézet alkotójának neve"
+  echo
+  echo "    Példa:"
+  echo "    `basename $0` http://hu.wikiquote.org/wiki/Nap_Idézete_archívum wikidezet"
+  exit
+fi
+
+fortune_dir="/usr/share/games/fortunes/hu"
+url="$1"
+name_of_db="$2"
+
+echo "Letöltjük az url-t..."
+wget "$url"
+
+echo "Kiszedjük belőle az idézeteket..."
+sed -n '/^<li>/,/<\/li>$/{    #<li> tag-ek tagok között
+#i\
+#%
+s/^<li>/%\
+/                           #csere sor elején <li> -> % (strfile-nak ez kell)
+#/<.?[ud]l>/d
+s/<[^>]*>//g                #html tag-ek törlése
+s/([ \.0-9]*)//             #dátumok törlése a végéről
+s/&#[0-9]*;//               #idétlen html karakterek
+s/^\[.*].*//                #[szerkesztés] -es sorok, nem tudom miért maradnak benne
+p                           #a maradék kiíratása
+}' "`basename $url`" > "$name_of_db"
+
+sed -i -e '/^$/ d' "$name_of_db" #üres sorok törlése
+sed -i "1,/%/d" "$name_of_db" # első % törlése
+
+alairas="                -- $3"
+
+if [ -n "$3" ]; then #iró nevének beszúrása
+sed -i -e "s/^%$/$alairas\n%/g" "$name_of_db"
+fi
+echo "$alairas" >> "$name_of_db" # a legvégére
+
+
+echo "A létrehozott fájlok:"
+ls "$name_of_db"*
+echo "Nézd meg, javítsd ha kell, aztán nyomj Entert a folytatáshoz..."
+echo
+echo
+kate "$name_of_db" &2>/dev/null &
+read
+
+echo "Elkészítjük az offseteket tartalmazó fájlt..."
+strfile "$name_of_db"
+
+echo "A létrehozott fájlok:"
+ls "$name_of_db"*
+
+echo "Bemásoljuk a fortune adatbázisok helyére"
+sudo mkdir -vp /usr/share/games/fortunes/hu
+sudo mv -v "$name_of_db" "$fortune_dir"
+sudo mv -v "$name_of_db".dat "$fortune_dir"
+
+rm "$name_of_db"*
+
+echo "Letöröljük a letöltött fájlt"
+rm "`basename $url`"*
+
+echo "Fortune próba..."
+
+for i in `seq 1 10`; do echo "---"; fortune "$fortune_dir/$name_of_db"; done
+
+echo "Kész"

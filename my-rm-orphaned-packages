@@ -1,0 +1,34 @@
+#!/bin/bash
+
+BLINK_RED="\033[5;31m"
+NORMAL="\033[0;0m"
+
+cecho () # Color-echo.
+# Argument $1 = message
+# Argument $2 = color
+{
+  local default_msg            # Doesn't really need to be a local variable.
+  message=${1:-$default_msg}   # Defaults to default message.
+  color=${2:-$NORMAL}          # Defaults to NORMAL, if not specified.
+
+  echo -en "$color"
+  echo "$message"
+  tput sgr0                      # Reset to normal.
+
+  return
+}
+
+
+echo
+cecho "!!! Warning !!!" $BLINK_RED
+echo "Nézd meg mit futtats!"
+echo '
+# leinstallált csomagok beállítófájljainak törlése
+LANG=en; dpkg --get-selections | grep deinstall | cut -f1 | xargs sudo aptitude show | grep "No current or candidate" | cut -d' ' -f8 | xargs sudo dpkg --purge
+
+#-dbg csomagok eltávolítása
+dpkg --get-selections | grep dbg | cut -f1 | xargs sudo dpkg --purge
+
+#orphaned  csomagok
+sudo deborphan | xargs sudo aptitude purge 
+'

@@ -1,0 +1,4 @@
+ xenophobe 	=	 idegengyűlölő
+ xenophobia 	=	 idegengyűlölet
+ xerox 	=	 xerox-gép
+ xylene 	=	 xilol

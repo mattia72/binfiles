@@ -1,0 +1,88 @@
+#!/bin/bash
+#Feldob egy fájl-választó ablakot és a kiválasztott
+#iso dvd image fájlt felmountolja a $MOUNT_POINT könyvtárba.
+
+#TODO Space-t tartalmazó fájlok mountolása!
+
+MOUNT_POINT=$1
+if [ -z $MOUNT_POINT ]
+then
+	echo "Usage: `basename $0` /mount/point"
+	exit 1
+fi
+
+TITLE="DVD\ image";
+FILENAME="/home/mata/movies";
+MOUNT=$( mount |grep ${MOUNT_POINT%'/'});
+
+GREEN="\033[0;32m"
+CYAN="\033[0;36m"
+RED="\033[0;31m"
+PURPLE="\033[0;35m"
+YELLOW="\033[1;33m"
+WHITE="\033[1;37m"
+BLINK_RED="\033[5;31m"
+NORMAL="\033[0;0m"
+
+
+cecho () # Color-echo.
+# Argument $1 = message
+# Argument $2 = color
+{
+  local default_msg            # Doesn't really need to be a local variable.
+  message=${1:-$default_msg}   # Defaults to default message.
+  color=${2:-$NORMAL}          # Defaults to NORMAL, if not specified.
+
+  echo -en "$color"
+  echo "$message"
+  tput sgr0                      # Reset to normal.
+
+  return
+}
+
+clear
+
+if [ -n "$MOUNT" ]
+then
+        cecho "A $MOUNT_POINT könyvtár már mountolva van! Umountoljuk? [Y|n]:" $RED # Sets the prompt string.
+        read valasz
+        case "$valasz" in
+         "Y" | "y" | ""         ) sudo umount $MOUNT_POINT;;
+         [*]                    ) echo "Bye..."; exit;;
+        esac
+fi
+cecho 'Indítsak egy fájl böngészőt kikeresni az új image fájlt? [Y|n|x]:' $GREEN
+read valasz
+case "$valasz" in
+"Y" | "y" | ""         ) #MOUNT=$(zenity --filename=${FILENAME} --file-selection --title=${TITLE});;
+                         MOUNT=$(kdialog --getopenfilename ${FILENAME} "*.iso *.nrg" --title=${TITLE});;
+"N" | "n"              ) cecho 'Akkor add meg az image elérési útját:' $CYAN ; read MOUNT;;
+*                      ) echo "Bye..."; exit;;
+esac
+
+if [ -n "$MOUNT" ]; then
+        MOUNT_TMP=$MOUNT
+        #if  zenity --question --text="Mountoljuk a $MOUNT_NO_BLANK fájlt?";then
+                cecho "$MOUNT mountolása $MOUNT_POINT -ra" $YELLOW
+                sudo mount -t iso9660 -o loop "$MOUNT" $MOUNT_POINT
+        #fi
+fi
+
+MOUNT=$( mount |grep ${MOUNT_POINT%'/'} );
+echo $MOUNT
+
+if [ -n "$MOUNT" ];then
+        cecho "$MOUNT mounted successfully!" $GREEN
+        cecho "Indíthatom az mplayer-t? [Y|n]:" $PURPLE
+        read valasz
+        case "$valasz" in
+        "Y" | "y" | "") mplayer -dvd-device $MOUNT_POINT dvd:// & ;;
+        *             ) echo "Bye..."; exit;;
+        esac
+else
+        cecho "mount -t iso9660 -o loop $MOUNT_TMP $MOUNT_POINT  nem sikerült!" $BLINK_RED
+fi
+
+echo "Goodbye..."
+#reset color
+cecho "" ""

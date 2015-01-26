@@ -1,0 +1,34 @@
+#!/bin/bash
+#tar wrapper
+password="efu+oiu3nl%#"
+secure_file_name="secure.tar.gz"
+archive_name="archive.tar.gz"
+
+function secret_untar()
+{
+  /bin/dd if="$1" | /usr/bin/openssl des3 -salt -d -k "$password"| /bin/tar xfz -
+}
+
+function secret_tar()
+{
+  /bin/tar cfz - "$backup_subdir" | /usr/bin/openssl des3 -salt -k "$password" | /bin/dd of="$secure_file_name"
+}
+
+PARAM=$1
+shift
+
+case $PARAM in
+-c|--compress) tar -czf "$archive_name" "$*" ;;
+-d|--decompress) tar -xzf "$*" ;;
+-sd |--secure-decompress) secret_untar "$*" ;;
+-sc | --secure-compress) secret_tar "$*";; 
+-l|--list) tar -tvvzf "$*";;
+*) echo "Usage: " `basename $0` ' [option] [other tar params] files|file.tar.gz|file.secure.tar.gz
+	option:
+		-c | --compress what_to_compress
+		-sc | --secure-compress directory_to_compress 
+		-d | --decompress compressed_file.tar.gz
+		-sd | --secure-decompress compessed_file.secure.tar.gz
+		-l | --list compressed_file.tar.gz
+'
+esac

@@ -1,0 +1,292 @@
+#!/bin/bash
+# Ez a szkript letölt egy honlapot
+
+# Alapértelmezett paraméterek:
+url="ftp://ftp.extra.hu/wwwroot/"
+backup_dir="/home/mata/www"
+mk_extra_dir="true" #így alapesetben a '/home/mata/www/mata.extra.hu/' -ba kerül
+is_dokuwiki="true" #így a 'conf' könyvtárat nem tölti le, nem rontja el a helyi installációt
+is_verbose="true"
+username=""
+password=""
+
+script=`basename $0`
+debug="false"
+
+is_ftp="true"
+function short_usage()
+{
+  echo -e "Használat: $script [kapcsolók] [url] [könyvtár]"
+}
+function usage()
+{
+  short_usage
+  echo "Kapcsolók:"
+  echo "      -h|--help      : segítség"
+  echo "      -v|--verbose   : bőbeszédű futás"
+  echo "      -e|--extra-dir : létrehoz egy külön könyvtárat a backup-dir alatt."
+  echo "      -d|--dokuwiki  : dokuwiki mentésekor kihagy bizonyos fájlokat,"
+  echo "                       így a backup művelet után nem kell újra"
+  echo "                       installálni a dokuwiki-t helyben is."
+  echo "Negálás:"
+  echo "      -n|--no-       : egy opció elött megfordítja annak jelentését."
+  echo "                       pl: -ne ugyanaz, mint --no-extra-dir,"
+  echo "                       azaz ne hozon létre könyvtárat"
+  echo "URL paraméterek:"
+  echo "                  url : ftp vagy http url, az alapértelmezés: $url ."
+  echo "-u |--user=FELHASZNÁLÓ: az ftp felhasználó beállítása a FELHASZNÁLÓRA."
+  echo "                        Ha nincs megadva, a szkript rákérdez."
+  echo "-pw|--password=JELSZÓ : az ftp jelszó beállítása a JELSZÓRA."
+  echo "                        Ha nincs megadva, a szkript rákérdez."
+  echo "             könyvtár : a mentés helye, az alapértelmezés: $backup_dir ."
+}
+function help_on_error()
+{
+  short_usage
+  echo "Próbáld kiadni a \"$script --help\" parancsot több lehetőségért."
+}
+function param_error_exit()
+{
+  echo "$script: hibás paraméter: -->$1 !"
+  help_on_error
+  exit
+}
+
+ret_val_get_equal_param=""
+function get_equal_param()
+{
+  local param_in=$1
+  local negating=$2
+  local param_should=$3
+  if [[ "$negating" == "true" ]]; then
+    local param=`expr match "$param_in" '\([^=]*\)=.*'`
+    if [[ "$param" == "$param_should" ]]; then
+        local value=`expr match "$param_in" '[^=]*=\(.*\)'`
+        ret_val_get_equal_param=$value #kész
+    else
+        param_error_exit $param_in
+    fi
+  else
+    param_error_exit "n$param_in"
+  fi
+}
+
+function short_param_handling()
+{
+  local param=$1
+  local negating=$2
+
+#egy db kötőjellel megadott paraméterek, tehát lehet : -h -e -d, -ed, -de stb
+  while [ "${#param}" -gt "0" ]; do  #a paraméter hossza > 0
+      case "${param:0:1}" in #az elso karakter
+          h         ) usage; exit;;
+          e         ) mk_extra_dir="$negating" ; negating="true";;
+          d         ) is_dokuwiki="$negating"; negating="true";;
+          v         ) is_verbose=$negating; negating="true";;
+          n         ) negating="false";; #a következőt negáljuk
+          p         ) get_equal_param $param $negating "pw"
+                      password=$ret_val_get_equal_param
+                      return;; # itt a vége
+          u         ) get_equal_param $param $negating "u"
+                      username=$ret_val_get_equal_param
+                      return;; # itt a vége
+
+          *         ) param_error_exit $param;;
+      esac
+    param=${param:1} # levágjuk az első karaktert
+#   echo $param
+    done
+}
+function long_param_handling()
+{
+  local param=$1
+  local negating=$2
+
+   if [ ${param:0:3} == "no-" ]; then #ha az előtag 'no-'
+       negating="false" #negatív jelentés,
+       param=${param:3} # levágjuk a 'no-' -t
+   fi
+   case "$param" in #paraméter
+        help      )usage; exit;;
+        extra-dir )mk_extra_dir="$negating" ; negating="true";;
+        dokuwiki  )is_dokuwiki="$negating"; negating="true";;
+        verbose   )is_verbose="$negating"; negating="true";;
+        password=*) get_equal_param $param $negating "password"
+                    password=$ret_val_get_equal_param
+                    return;; # itt a vége
+        user=*    ) get_equal_param $param $negating "user"
+                    username=$ret_val_get_equal_param
+                    return;; # itt a vége
+
+        *         ) param_error_exit $param;;
+    esac
+}
+function other_param_handling()
+{
+  local param=$1
+
+   case $param in
+    http://* ) url=$param; is_ftp="false";; #ez http cím
+    ftp://*  ) url=$param; is_ftp="true";; #ez egy ftp cím lesz
+    /*       ) backup_dir=$param;; #csak a backup_dir maradt
+    *        ) param_error_exit $param;; #vagy egy hibás paraméter
+   esac
+}
+function param_handling()
+{
+  local negating="true"
+  local param=`expr match "$1" '-\([^-].*\)'`
+
+  if [ -n "$param" ]; then
+#egy db kötőjellel megadott (-rövid) paraméterek
+    short_param_handling $param $negating
+  else
+#két kötőjeles (--hosszú) vagy kötőjel nélküli paraméterek
+    param=`expr match "$1" '--\(.*\)'`
+    if [ -n "$param" ]; then
+#két kötőjeles (--hosszú) paraméterek
+        long_param_handling $param $negating
+    else
+#nincs kötőjel
+        other_param_handling $1
+    fi
+  fi
+}
+
+function debug_msgs()
+{
+  if [[ "$debug" == "true" ]]; then
+  echo "**********Debug üzenet*************"
+  fi
+#feldolgozás eredménye...
+  echo "Beállított kapcsolók:"
+  echo "  verbose    = $is_verbose"
+  echo "  extra-dir  = $mk_extra_dir"
+  echo "  dokuwiki   = $is_dokuwiki"
+  echo "Ftp paraméterek:"
+  echo "  url        = $url"
+  echo "  is_ftp     = $is_ftp"
+  echo "  username   = $username"
+  echo -n "  password   = ";
+  local i=${#password} #password helyett csak *-ok
+  while [ "$i" -gt 0 ]; do  echo -ne "*";  let "i -= 1";  done
+  echo
+  echo "  backup-dir = $backup_dir"
+  if [ -n "$verbose"       ]; then echo "  verbose     = $verbose"; fi
+  if [ -n "$exclude_list"  ]; then echo "  exclude_list= $exclude_list"; fi
+  if [ -n "$wget_url"      ]; then echo "  wget_url    = $wget_url"; fi
+  if [ -n "$cut_dir "      ]; then echo "  cut_dir     = $cut_dir"; fi
+  echo "Aktuális könyvtár: `pwd`"
+}
+ret_val_count_char=""
+function count_char()
+{
+  local str=$1
+  local char=$2
+  ret_val_count_char=`echo $str | tr -cd $char | wc -c `
+}
+##############     Itt kezdődik a szkript      #################
+
+#Paraméter beolvasás és feldolgozás
+until [ -z "$1" ]; do  param_handling "$1";  shift; done
+
+if [[ "$debug" == "true" || $is_verbose == "true" ]]; then
+  debug_msgs
+fi
+
+if [[ "$is_ftp" = "true" ]]; then
+  if [ -z $username ]; then
+    echo -n "Felhasználónév: "
+    read username
+  fi
+
+  if [ -z $password ]; then
+    stty -echo    # Turns off screen echo.
+    echo -n "Jelszó: "
+    read password
+    stty echo     # Restores screen echo.
+    echo
+  fi
+fi
+
+
+if [[ "${backup_dir: -1}" == '/' ]]; then # az utolsó karakter (a -1 elé kell egy space, vagy zárójel)!!!
+   backup_dir=${backup_dir%'/'} #vágjuk le
+fi
+
+if [[ "$mk_extra_dir" == "true" ]]; then
+   if [ "$is_ftp" == "true" ]; then #csináljunk felhasználónév.extra.hu stringet
+     dir=`expr match "$url" '[^\.]*\.\([^/]*\).*'`
+     dir="$username.$dir"
+     backup_dir="$backup_dir/$dir"
+   else
+     dir=`expr match "$url" 'http://\([^/]*\).*'`
+     backup_dir="$backup_dir/$dir"
+   fi
+fi
+
+if [[ "$debug" == "true" ]]; then debug_msgs; fi
+
+verbose="" #mkdir paramétere
+if [ "$is_verbose" == "true" ]; then verbose="--verbose"; fi
+
+mkdir $verbose --parents $backup_dir
+pushd $backup_dir >/dev/null || param_error_exit "$backup_dir -t nem lehet létrehozni!"
+
+#dokuwiki mentésekor a -Rlocal.php,users.auth.php,acl.auth.php kapcsoló kihagyja
+#a felsorolt fájlokat, így a backup művelet után nem kell újra installálni a
+#dokuwiki-t helyben is az -X conf tán még jobb
+
+if [[ "$is_dokuwiki" == "true" ]];then
+  exclude_list="-X conf"
+fi
+
+verbose="--no-verbose" #wget paramétere
+if [ "$is_verbose" == "true" ]; then
+  verbose="--verbose" #wget paramétere
+fi
+
+if [[ "${url: -1}" == '/' ]]; then  url=${url%'/'} #vágjuk le
+fi
+
+count_char $url '/'
+cut_dir=$ret_val_count_char
+let 'cut_dir -= 2' # a http:// ftp:// utáni 2 db nem számít
+
+if [ "$is_ftp" == "true" ]; then
+  wget_param="$verbose --mirror --convert-links --no-host-directories --cut-dirs=$cut_dir $exclude_list --user=$username --password=$password $url -o wget.log"
+else
+  wget_param="$verbose --mirror --convert-links $url -o wget.log"
+fi
+
+if [[ "$debug" == "true" ]]; then  debug_msgs; fi
+
+echo -n "Letöltés: \"$url\" -> \"$backup_dir\""
+if [ -n "$exclude_list" ]; then
+ echo ", a \"${exclude_list:3}\" könyvtár kihagyásával."
+else
+  echo "."
+fi
+
+#induljon a letöltés...
+#ide nem kell idézőjel, mert nem szereti (?)
+if [ "$debug" == "true" ]; then
+  echo "wget $wget_param"
+fi
+wget $wget_param
+wget_resp=$?
+
+if [[ "$wget_resp" !=  "0" ]]; then
+  echo "HIBA! wget válasz: $wget_resp"
+	echo "Nézd meg a $backup_dir/wget.log fájlt!"
+fi
+
+if [[ "$debug" == "true" ]]; then
+  cat wget.log
+fi
+
+# vissza az eredeti könyvtárba...
+popd>/dev/null
+
+echo "Kész!"
+exit $wget_resp

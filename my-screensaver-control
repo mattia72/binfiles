@@ -1,0 +1,18 @@
+#!/bin/sh
+
+ENABLE=""
+case "$1" in 
+-e|--enable)ENABLE="TRUE";;
+-d|--disable)ENABLE="FALSE";;
+*) echo "Usage: `basename $0` [--enable|--disable]"
+	exit 1 ;;
+esac
+
+#Disable Screensaver
+gconftool-2 --set /apps/gnome-screensaver/idle_activation_enabled --type bool $ENABLE
+
+#Disable PowerManager
+gconftool-2 --set /apps/gnome-powermanager/idle_activation_enabled --type bool $ENABLE
+
+echo "Ready."
+

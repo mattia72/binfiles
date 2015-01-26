@@ -1,0 +1,7 @@
+#!/bin/bash
+
+xauth_file=`ls /var/run/xauth/*`
+echo "Calling x11vnc with -auth $xauth_file ..."
+#sudo x11vnc -safer -localhost -noxfixes -once -nopw -auth "$xauth_file" -display :0
+sudo x11vnc -safer -localhost -noxfixes        -nopw -auth "$xauth_file" -display :0
+

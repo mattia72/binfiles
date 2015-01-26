@@ -1,0 +1,54 @@
+#!/bin/bash
+
+language=""
+languages=( "hu" "de" "en" )
+dir="/usr/share/games/fortunes"
+script=`basename $0`
+
+function usage()
+{
+  echo -e "$script: használat: $script [nyelv|-h|--help] [fortune paraméterek]"
+  echo "           nyelv              : ${languages[@]}, alapértelmezésben véletlenszerűen"
+  echo "           -h|--help          : segítség"
+  echo "           fortune paraméterek: lsd. \$ man fortune"
+}
+
+function rndlang()
+{
+  let "randnum=$RANDOM % ${#languages[*]} "
+  language=${languages[randnum]}
+}
+
+if [ -z $1 ]
+then
+	rndlang
+else
+  case $1 in
+  "-h"|"--help") usage; exit;;
+  *) for lan in ${languages[@]}
+	  do
+	  if [ "$lan" == "$1" ]; then
+	    language=$1
+      shift
+	    break
+	  fi
+	  done
+	  if [ -z $language ]; then
+		  rndlang
+    fi;;
+  esac
+fi
+
+case "$language" in
+de) dir="$dir/de";;
+hu) dir="$dir/hu";;
+en) dir="$dir";;
+*) echo "$script: hiba: \"$language\" nyelven nincs bejegyzés! Paraméterként továbbadjuk fortune-nak!" >2;;
+esac
+
+case "$language" in
+#de) fortune "$@" "$dir" | iconv -f=iso-8859-2 -t=utf-8;;
+*) fortune "$@" "$dir";;
+esac
+
+

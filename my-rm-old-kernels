@@ -1,0 +1,42 @@
+#!/bin/bash
+
+# Ez nagyon megváltozott!!!!
+version_regex="[0-9]\.[0-9]\+\.[0-9]-[0-9][0-9]"
+
+kernels=( `dpkg --get-selections | grep "linux-image-$version_regex.*[^e]install" | sort -r | cut -d'-' -f3-4` )
+#echo `dpkg --get-selections | grep "linux-image-$version_regex.*[^e]install" | sort -r | cut -d'-' -f3-4` 
+
+kernel_num="${#kernels[@]}"
+kernel_num_limit=2
+
+
+echo "Installed kernel versions:"
+for (( i = 0; i< kernel_num; i++ ))
+do
+  echo "${kernels[$i]}"
+done
+if [[ $kernel_num > $kernel_num_limit ]]
+then
+  for (( i=kernel_num_limit; i < kernel_num; i++))
+  do
+    echo -n "Remove version ${kernels[$i]} ?"
+    read answer
+    case $answer in
+      [yY] | "" ) sudo apt-get remove -y --purge ${kernels[$i]}-* ;;
+      *) continue;;
+    esac
+  done
+  echo -n "Update grub?"
+  read answer
+  case $answer in
+    [yY] | "" )  sudo update-grub ;;
+  esac
+else
+  echo "There is only $kernel_num kernel versions installed:"
+  for (( i=0; i < kernel_num; i++))
+  do
+    echo "${kernels[$i]}"
+  done
+  echo "Nothing to do."
+fi
+echo "Ready."

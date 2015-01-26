@@ -1,0 +1,50 @@
+#!/bin/bash
+# Finds the first active ip in the given ip range
+
+base_ip="192.168.1"
+ip_ends_to_check=`seq 100 105`
+
+
+pinged=0
+function ping_other()
+{
+	echo -n "ping $1 ... "
+	pinged=`ping -c 1 "$1" | grep -o ". received" | cut -d ' ' -f 1`
+	if [[ 1 == $pinged ]]
+	then
+		echo "ok"
+	else
+		echo "nok"
+	fi
+}
+
+my_inet_addr=`/home/mata/bin/my-ip | grep "$base_ip"`
+
+echo "My ip addres: $my_inet_addr"
+
+ip_end=`echo $my_inet_addr | cut -d '.' -f 4`
+
+ip_other=""
+for i in $ip_ends_to_check
+do
+	if [[ $i == $ip_end ]]
+	then 
+		continue
+	fi
+	ping_other "$base_ip.$i"
+	if [[ 1 == $pinged ]]
+	then
+		ip_other="$base_ip.$i"
+		break	
+	fi
+done
+
+
+if [ -z  "$ip_other" ]
+then
+	echo "Other ip not found."
+	exit 1
+fi
+
+echo "$ip_other"
+

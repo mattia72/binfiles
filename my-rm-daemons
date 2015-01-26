@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# /etc/init.d -ből feleslegesen mindíg elinduló init szkriptek kivétele
+#info: Vezérlőpult->Rendszeradm->System services
+processes=(apache2 mysql mysql-ndb mysql-ndb-mgm 
+mdadm mdadm-raid cupsys evms festival lvm exim4 bluetooth samba 
+vboxnetadp vboxnetflt vboxdrv virtualbox-ose-guest-utils)
+
+#mdadm: It is a program that can be used to create, manage, and monitor MD devices (software RAID), as well as multipath devices.
+#cupsys: Common UNIX Printing System
+#evms: Enterprise Volume Management System (core)
+#lvm: The Linux Logical Volume Manager
+#exim: Mail transfer Agent -> drupal
+#festival: speech recognizing
+#bluetooth: bluez
+#vbox...: virtual box
+
+for process in ${processes[@]}
+do
+  echo "Try to remove $process from system startup links"
+  sudo update-rc.d -f $process remove
+done
+
+
+
+

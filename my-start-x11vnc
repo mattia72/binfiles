@@ -1,0 +1,3 @@
+#!/bin/bash
+
+sudo x11vnc -safer -localhost -once -noxfixes -nopw -auth /var/lib/gdm/:0.Xauth -display :0
