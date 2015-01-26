@@ -10,7 +10,7 @@ backup_dir="/home/mata/Ubuntu One/rdiff-backups"
 extension="secret-backup"
 list_extension="backup-list"
 remove_older_than=1M #s, m, h, D, W, M, or Y, indicating seconds, minutes, hours, days, weeks, months, or years
-password="efe+oiu3nl%#"
+password="secret password"
 backup_owned_by="mata"
 
 function usage()
