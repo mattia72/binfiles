@@ -1,16 +1,28 @@
 #!/bin/bash
 
+##
+## Usage: my-fortune [-h|--help|lang] [fortune parameteres]
+## 
+##    Options:
+##      -h, --help        : Display this message.
+##      lang              : language of the fortune message, random by default
+##      fortune parameters: see man fortune
+## 
+
 language=""
 languages=( "hu" "de" "en" )
-dir="/usr/share/games/fortunes"
+dir="/usr/share/games/fortune"
 script=`basename $0`
 
 function usage()
 {
-  echo -e "$script: használat: $script [nyelv|-h|--help] [fortune paraméterek]"
-  echo "           nyelv              : ${languages[@]}, alapértelmezésben véletlenszerűen"
-  echo "           -h|--help          : segítség"
-  echo "           fortune paraméterek: lsd. \$ man fortune"
+echo -e "Usage: $script [-h|--help|lang] [fortune parameteres]
+
+   Options:
+     -h, --help        : Display this message.
+     lang              : language of the fortune message, random by default
+     fortune parameters: see man fortune
+"  
 }
 
 function rndlang()
